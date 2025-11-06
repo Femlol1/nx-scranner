@@ -51,14 +51,25 @@ export async function POST(req: Request) {
 		const expiresAt = new Date(now);
 		expiresAt.setHours(23, 59, 59, 999);
 
-		const doc: any = {
-			text: text ?? null,
-			parsed: parsed ?? null,
-			count: typeof count === "number" ? count : 1,
-			firstSeen: firstSeen ? new Date(firstSeen) : now,
-			lastSeen: lastSeen ? new Date(lastSeen) : now,
-			createdAt: now,
-			expiresAt,
+		// choose a stable key for deduplication: prefer parsed.hash, else text
+		const key = (parsed && (parsed.hash || parsed.id)) || (typeof text === "string" ? text : null);
+
+		// Build update that increments count, sets lastSeen and parsed, and records a use timestamp
+		const useAt = now;
+		const filter: any = { key };
+		const update: any = {
+			$set: {
+				text: text ?? null,
+				parsed: parsed ?? null,
+				lastSeen: useAt,
+				expiresAt,
+			},
+			$setOnInsert: {
+				firstSeen: useAt,
+				createdAt: now,
+			},
+			$inc: { count: 1 },
+			$push: { uses: { at: useAt } },
 		};
 
 		// ensure TTL index exists (best-effort)
@@ -68,14 +79,22 @@ export async function POST(req: Request) {
 			console.warn("Could not create TTL index on scans.expiresAt:", e);
 		}
 
+		// Perform an upsert so repeated scans update the same document
+		let updated: any = null;
 		try {
-			await col.insertOne(doc);
+			const res = await col.findOneAndUpdate(filter, update, {
+				upsert: true,
+				returnDocument: "after",
+			} as any);
+			updated = res.value;
 		} catch (e: any) {
-			console.error("Failed to insert scan document:", e);
+			console.error("Failed to upsert scan document:", e);
 			return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
 		}
 
-		return NextResponse.json({ ok: true });
+		// respond with duplicate metadata so clients can notify the user
+		const wasDuplicate = !!updated && updated.count > 1;
+		return NextResponse.json({ ok: true, wasDuplicate, count: updated?.count ?? 1, firstSeen: updated?.firstSeen, lastSeen: updated?.lastSeen });
 	} catch (err: any) {
 		console.error("/api/scans POST handler error:", err);
 		return NextResponse.json(

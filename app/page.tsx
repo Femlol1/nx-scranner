@@ -30,6 +30,20 @@ export default function Home() {
 	const [parsed, setParsed] = useState<any | null>(null);
 	const [validationErrors, setValidationErrors] = useState<string[]>([]);
 
+	// theme: 'light' | 'dark' | null (null = follow system)
+	const [theme, setTheme] = useState<string | null>(null);
+
+	const toggleTheme = () => {
+		try {
+			const next = theme === "dark" ? "light" : "dark";
+			setTheme(next);
+			localStorage.setItem("theme", next);
+			document.documentElement.setAttribute("data-theme", next);
+		} catch (e) {
+			// ignore (SSR)
+		}
+	};
+
 	// parse a QR payload of the colon-separated format into fields and validate
 	const parseQrText = (text: string) => {
 		const errors: string[] = [];
@@ -272,6 +286,19 @@ export default function Home() {
 	};
 
 	useEffect(() => {
+		// load theme preference from localStorage (if present)
+		try {
+			const s = localStorage.getItem("theme");
+			if (s === "light" || s === "dark") {
+				setTheme(s);
+				document.documentElement.setAttribute("data-theme", s);
+			} else {
+				setTheme(null);
+				document.documentElement.removeAttribute("data-theme");
+			}
+		} catch (e) {
+			// ignore (SSR or security)
+		}
 		// create BarcodeDetector if available
 		const BD = (globalThis as any).BarcodeDetector;
 		if (BD) {
@@ -455,20 +482,32 @@ export default function Home() {
 			setParsed(parsedRes.fields ?? null);
 			setValidationErrors(parsedRes.errors ?? []);
 
-			// fire-and-forget post
-			fetch("/api/scans", {
-				method: "POST",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({
-					text,
-					parsed: parsedRes.fields,
-					firstSeen: new Date().toISOString(),
-					lastSeen: new Date().toISOString(),
-					count: 1,
-				}),
-			}).catch(() => {
-				/* ignore network errors for now */
-			});
+			// post and check server response for duplicate metadata
+			(async () => {
+				try {
+					const resp = await fetch("/api/scans", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({
+							text,
+							parsed: parsedRes.fields,
+							firstSeen: new Date().toISOString(),
+							lastSeen: new Date().toISOString(),
+							count: 1,
+						}),
+					});
+					const j = await resp.json().catch(() => ({}));
+					if (j && j.wasDuplicate) {
+						// show a short-lived notification about duplicate use
+						const prev = j.lastSeen ? new Date(j.lastSeen).toLocaleString() : "unknown";
+						setError(`Duplicate scan — previously used at ${prev} (count: ${j.count})`);
+						// clear after a few seconds
+						setTimeout(() => setError(null), 6000);
+					}
+				} catch (e) {
+					// ignore network errors
+				}
+			})();
 		} catch (e) {
 			// ignore parsing/post errors
 		}
@@ -549,13 +588,25 @@ export default function Home() {
 		setValidationErrors(res.errors ?? []);
 	}, [lastResult]);
 
-	return (
-		<div className="min-h-screen flex flex-col items-center justify-start gap-6 p-6 bg-gradient-to-b from-gray-50 to-gray-100">
-			<h1 className="text-2xl font-semibold">QR Scanner</h1>
+		return (
+			<div
+				className="min-h-screen flex flex-col items-center justify-start gap-6 p-6"
+				style={{ background: "linear-gradient(var(--background), var(--panel-bg))" }}
+			>
+			<div className="w-full flex items-center justify-between">
+				<h1 className="text-2xl font-semibold">QR Scanner</h1>
+				<button
+					className="px-3 py-1 rounded border bg-white/80 hover:bg-gray-100"
+					onClick={toggleTheme}
+					title="Toggle light/dark theme"
+				>
+					{theme === "dark" ? "🌙 Dark" : "☀️ Light"}
+				</button>
+			</div>
 
 			<div className="w-full max-w-3xl grid grid-cols-1 md:grid-cols-2 gap-4">
 				<div className="flex flex-col gap-3">
-					<div className="bg-gray-100 rounded overflow-hidden aspect-video flex items-center justify-center relative shadow-sm">
+					<div className="bg-muted rounded overflow-hidden aspect-video flex items-center justify-center relative shadow-sm border-default">
 						<video
 							ref={videoRef}
 							className="w-full h-full object-cover"
@@ -566,7 +617,7 @@ export default function Home() {
 
 						{/* visual overlay to help user aim */}
 						<div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-							<div className="w-2/3 h-2/3 border-2 border-gray-300 rounded-md shadow-sm bg-white/30"></div>
+							<div className="w-2/3 h-2/3 border-2 rounded-md shadow-sm bg-panel-quiet border-default"></div>
 						</div>
 					</div>
 
@@ -589,8 +640,8 @@ export default function Home() {
 						{/* Single-scan toggle */}
 						<button
 							className={`px-2 py-1 rounded border ${
-								singleScan ? "bg-yellow-100" : "bg-white"
-							}`}
+								singleScan ? "bg-yellow-100" : "bg-panel"
+							} border-default`}
 							onClick={() => setSingleScan((v) => !v)}
 							title="Toggle single-scan mode (press 's')"
 						>
@@ -601,8 +652,8 @@ export default function Home() {
 						{torchAvailable && (
 							<button
 								className={`px-2 py-1 rounded border ${
-									torchOn ? "bg-yellow-200" : "bg-white"
-								}`}
+									torchOn ? "bg-yellow-200" : "bg-panel"
+								} border-default`}
 								onClick={toggleTorch}
 								title="Toggle torch/flash"
 							>
@@ -628,7 +679,7 @@ export default function Home() {
 						)}
 
 						<button
-							className="px-4 py-2 bg-gray-200 rounded"
+							className="px-4 py-2 bg-muted rounded"
 							onClick={() => copyResult()}
 							disabled={!lastResult}
 						>
@@ -636,7 +687,7 @@ export default function Home() {
 						</button>
 
 						<button
-							className="px-4 py-2 bg-gray-200 rounded"
+							className="px-4 py-2 bg-muted rounded"
 							onClick={() => openIfUrl()}
 							disabled={!lastResult}
 						>
@@ -648,7 +699,7 @@ export default function Home() {
 				</div>
 
 				<div className="flex flex-col gap-3">
-					<div className="p-3 border rounded min-h-[12rem] bg-white">
+					<div className="p-3 border rounded min-h-[12rem] bg-panel border-default">
 						<div className="flex items-center justify-between">
 							<h2 className="font-medium">Last result</h2>
 							<div>
@@ -671,7 +722,7 @@ export default function Home() {
 								<em>No result yet</em>
 							) : (
 								<div className="space-y-2">
-									<div className="font-mono text-xs bg-gray-50 p-2 rounded">
+											<div className="font-mono text-xs bg-panel-quiet p-2 rounded">
 										{lastResult}
 									</div>
 									{parsed ? (
@@ -726,12 +777,12 @@ export default function Home() {
 						</div>
 					</div>
 
-					<div className="p-3 border rounded bg-white flex-1">
+					<div className="p-3 border rounded bg-panel flex-1 border-default">
 						<div className="flex items-center justify-between mb-2">
 							<h3 className="font-medium">History</h3>
 							<div className="flex gap-2">
 								<button
-									className="px-2 py-1 text-sm bg-gray-100 rounded"
+									className="px-2 py-1 text-sm bg-muted rounded"
 									onClick={clearHistory}
 								>
 									Clear
@@ -764,13 +815,13 @@ export default function Home() {
 										</div>
 										<div className="flex gap-1">
 											<button
-												className="text-xs px-2 py-1 bg-gray-100 rounded"
+												className="text-xs px-2 py-1 bg-muted rounded"
 												onClick={() => copyResult(entry.text)}
 											>
 												Copy
 											</button>
 											<button
-												className="text-xs px-2 py-1 bg-gray-100 rounded"
+												className="text-xs px-2 py-1 bg-muted rounded"
 												onClick={() => openIfUrl(entry.text)}
 											>
 												Open
