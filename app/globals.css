@@ -1,53 +1,59 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+	--background: #ffffff;
+	--foreground: #171717;
 }
 
-
-
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+	:root {
+		--background: #0a0a0a;
+		--foreground: #ededed;
+	}
 }
 
 /* Explicit theme overrides via data-theme attribute on <html> */
 html[data-theme="light"] {
-  --background: #ffffff;
-  --foreground: #171717;
+	--background: #ffffff;
+	--foreground: #171717;
 }
 
 html[data-theme="dark"] {
-  --background: #0a0a0a;
-  --foreground: #ededed;
+	--background: #0a0a0a;
+	--foreground: #ededed;
 }
 
 /* Panel and UI variables (used by helper classes below) */
 :root {
-  --panel-bg: #ffffff;
-  --muted-bg: #f3f4f6;
-  --panel-overlay: rgba(255,255,255,0.3);
-  --border-color: #e5e7eb;
+	--panel-bg: #ffffff;
+	--muted-bg: #f3f4f6;
+	--panel-overlay: rgba(255, 255, 255, 0.3);
+	--border-color: #e5e7eb;
 }
 
 html[data-theme="dark"] {
-  --panel-bg: #0b1220;
-  --muted-bg: #071023;
-  --panel-overlay: rgba(255,255,255,0.03);
-  --border-color: #1f2937;
+	--panel-bg: #0b1220;
+	--muted-bg: #071023;
+	--panel-overlay: rgba(255, 255, 255, 0.03);
+	--border-color: #1f2937;
 }
 
 /* Utility classes that use CSS variables so theme toggles change panels */
-.bg-panel { background: var(--panel-bg) !important; }
-.bg-muted { background: var(--muted-bg) !important; }
-.bg-panel-quiet { background: var(--panel-overlay) !important; }
-.border-default { border-color: var(--border-color) !important; }
+.bg-panel {
+	background: var(--panel-bg) !important;
+}
+.bg-muted {
+	background: var(--muted-bg) !important;
+}
+.bg-panel-quiet {
+	background: var(--panel-overlay) !important;
+}
+.border-default {
+	border-color: var(--border-color) !important;
+}
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+	background: var(--background);
+	color: var(--foreground);
+	font-family: Arial, Helvetica, sans-serif;
 }

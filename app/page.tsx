@@ -2,6 +2,7 @@
 
 import jsQR from "jsqr";
 import { useCallback, useEffect, useRef, useState } from "react";
+import Toast from "../components/Toast";
 
 export default function Home() {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -29,6 +30,8 @@ export default function Home() {
 	// parsed result state
 	const [parsed, setParsed] = useState<any | null>(null);
 	const [validationErrors, setValidationErrors] = useState<string[]>([]);
+	const [toastMessage, setToastMessage] = useState<string>("");
+	const [lastUses, setLastUses] = useState<string[] | null>(null);
 
 	// theme: 'light' | 'dark' | null (null = follow system)
 	const [theme, setTheme] = useState<string | null>(null);
@@ -497,13 +500,32 @@ export default function Home() {
 						}),
 					});
 					const j = await resp.json().catch(() => ({}));
-					if (j && j.wasDuplicate) {
-						// show a short-lived notification about duplicate use
-						const prev = j.lastSeen ? new Date(j.lastSeen).toLocaleString() : "unknown";
-						setError(`Duplicate scan — previously used at ${prev} (count: ${j.count})`);
-						// clear after a few seconds
-						setTimeout(() => setError(null), 6000);
-					}
+						if (j && j.wasDuplicate) {
+							// show a toast notification about duplicate use
+							const prev = j.lastSeen
+								? new Date(j.lastSeen).toLocaleString()
+								: "unknown";
+							setToastMessage(`Duplicate scan — previously used at ${prev} (count: ${j.count})`);
+							// fetch detailed uses from the list endpoint (small list expected)
+							try {
+								const listResp = await fetch(`/api/scans/list`);
+								const listJson = await listResp.json().catch(() => []);
+								if (Array.isArray(listJson)) {
+									// try to find by hash (if parsed hash) or by exact text
+									const key = (parsedRes.fields && (parsedRes.fields.hash || parsedRes.fields.hash)) || null;
+									let found = null as any;
+									if (key) found = listJson.find((r: any) => (r.parsed && (r.parsed.hash === key)) || r.key === key || r.text === text);
+									if (!found) found = listJson.find((r: any) => r.text === text);
+									if (found && Array.isArray(found.uses)) {
+										setLastUses(found.uses.map((u: any) => new Date(u.at).toLocaleString()));
+									} else {
+										setLastUses(null);
+									}
+								}
+							} catch (e) {
+								// ignore list fetch errors
+							}
+						}
 				} catch (e) {
 					// ignore network errors
 				}
@@ -588,11 +610,13 @@ export default function Home() {
 		setValidationErrors(res.errors ?? []);
 	}, [lastResult]);
 
-		return (
-			<div
-				className="min-h-screen flex flex-col items-center justify-start gap-6 p-6"
-				style={{ background: "linear-gradient(var(--background), var(--panel-bg))" }}
-			>
+	return (
+		<div
+			className="min-h-screen flex flex-col items-center justify-start gap-6 p-6"
+			style={{
+				background: "linear-gradient(var(--background), var(--panel-bg))",
+			}}
+		>
 			<div className="w-full flex items-center justify-between">
 				<h1 className="text-2xl font-semibold">QR Scanner</h1>
 				<button
@@ -696,6 +720,9 @@ export default function Home() {
 					</div>
 
 					{error && <div className="text-sm text-red-600">{error}</div>}
+
+					{/* Toast component (auto-hiding) */}
+					<Toast message={toastMessage} onClose={() => setToastMessage("")} />
 				</div>
 
 				<div className="flex flex-col gap-3">
@@ -722,7 +749,7 @@ export default function Home() {
 								<em>No result yet</em>
 							) : (
 								<div className="space-y-2">
-											<div className="font-mono text-xs bg-panel-quiet p-2 rounded">
+									<div className="font-mono text-xs bg-panel-quiet p-2 rounded">
 										{lastResult}
 									</div>
 									{parsed ? (
@@ -768,6 +795,16 @@ export default function Home() {
 											<ul className="list-disc pl-5">
 												{validationErrors.map((e, i) => (
 													<li key={i}>{e}</li>
+												))}
+											</ul>
+										</div>
+									)}
+									{lastUses && (
+										<div className="mt-3 text-sm">
+											<div className="text-xs text-gray-600">Recent uses</div>
+											<ul className="list-disc pl-5">
+												{lastUses.map((u, i) => (
+													<li key={i}>{u}</li>
 												))}
 											</ul>
 										</div>

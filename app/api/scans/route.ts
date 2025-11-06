@@ -1,50 +1,28 @@
-import { MongoClient } from "mongodb";
 import { NextResponse } from "next/server";
+import { getClient } from "../../lib/mongo";
 
 // This route uses the Node.js runtime because the MongoDB native driver
 // requires network/socket support not available in the Edge runtime.
 export const runtime = "nodejs";
 
-// A tiny Mongo helper that caches the connection in globalThis to avoid
-// creating many connections during hot reload / lambda cold starts.
-declare global {
-	// eslint-disable-next-line no-var
-	var _mongoClientPromise: Promise<MongoClient> | undefined;
-}
-
-const getClient = async (): Promise<MongoClient> => {
-	const uri = process.env.MONGODB_URI;
-	if (!uri) throw new Error("MONGODB_URI environment variable is not set");
-
-	// use globalThis so this works in all Node contexts
-	const g = globalThis as any;
-	if (!g._mongoClientPromise) {
-		const client = new MongoClient(uri);
-		g._mongoClientPromise = client.connect();
-	}
-	return g._mongoClientPromise as Promise<MongoClient>;
-};
+// (Using shared getClient from app/lib/mongo.ts)
 
 export async function POST(req: Request) {
 	try {
 		const body = await req.json();
 		const { text, parsed, firstSeen, lastSeen, count } = body || {};
 
-		let client: MongoClient;
-		try {
-			client = await getClient();
-		} catch (e: any) {
-			// Return a clearer error to the client when env/config is wrong
-			console.error("Mongo client error:", e);
-			return NextResponse.json(
-				{ ok: false, error: e?.message || String(e) },
-				{ status: 500 }
-			);
-		}
+			let client;
+			try {
+				client = await getClient();
+			} catch (e: any) {
+				console.error("Mongo client error:", e);
+				return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+			}
 
-		const dbName = process.env.MONGODB_DB || "nx-scanner";
-		const db = client.db(dbName);
-		const col = db.collection("scans");
+			const dbName = process.env.MONGODB_DB || "nx-scanner";
+			const db = client.db(dbName);
+			const col = db.collection("scans");
 
 		// set expiresAt to end of current day (server local tz)
 		const now = new Date();
@@ -52,7 +30,9 @@ export async function POST(req: Request) {
 		expiresAt.setHours(23, 59, 59, 999);
 
 		// choose a stable key for deduplication: prefer parsed.hash, else text
-		const key = (parsed && (parsed.hash || parsed.id)) || (typeof text === "string" ? text : null);
+		const key =
+			(parsed && (parsed.hash || parsed.id)) ||
+			(typeof text === "string" ? text : null);
 
 		// Build update that increments count, sets lastSeen and parsed, and records a use timestamp
 		const useAt = now;
@@ -89,12 +69,21 @@ export async function POST(req: Request) {
 			updated = res.value;
 		} catch (e: any) {
 			console.error("Failed to upsert scan document:", e);
-			return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+			return NextResponse.json(
+				{ ok: false, error: e?.message || String(e) },
+				{ status: 500 }
+			);
 		}
 
 		// respond with duplicate metadata so clients can notify the user
 		const wasDuplicate = !!updated && updated.count > 1;
-		return NextResponse.json({ ok: true, wasDuplicate, count: updated?.count ?? 1, firstSeen: updated?.firstSeen, lastSeen: updated?.lastSeen });
+		return NextResponse.json({
+			ok: true,
+			wasDuplicate,
+			count: updated?.count ?? 1,
+			firstSeen: updated?.firstSeen,
+			lastSeen: updated?.lastSeen,
+		});
 	} catch (err: any) {
 		console.error("/api/scans POST handler error:", err);
 		return NextResponse.json(
