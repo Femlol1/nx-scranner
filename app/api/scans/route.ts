@@ -12,17 +12,20 @@ export async function POST(req: Request) {
 		const body = await req.json();
 		const { text, parsed, firstSeen, lastSeen, count } = body || {};
 
-			let client;
-			try {
-				client = await getClient();
-			} catch (e: any) {
-				console.error("Mongo client error:", e);
-				return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
-			}
+		let client;
+		try {
+			client = await getClient();
+		} catch (e: any) {
+			console.error("Mongo client error:", e);
+			return NextResponse.json(
+				{ ok: false, error: e?.message || String(e) },
+				{ status: 500 }
+			);
+		}
 
-			const dbName = process.env.MONGODB_DB || "nx-scanner";
-			const db = client.db(dbName);
-			const col = db.collection("scans");
+		const dbName = process.env.MONGODB_DB || "nx-scanner";
+		const db = client.db(dbName);
+		const col = db.collection("scans");
 
 		// set expiresAt to end of current day (server local tz)
 		const now = new Date();

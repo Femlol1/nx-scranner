@@ -500,32 +500,45 @@ export default function Home() {
 						}),
 					});
 					const j = await resp.json().catch(() => ({}));
-						if (j && j.wasDuplicate) {
-							// show a toast notification about duplicate use
-							const prev = j.lastSeen
-								? new Date(j.lastSeen).toLocaleString()
-								: "unknown";
-							setToastMessage(`Duplicate scan — previously used at ${prev} (count: ${j.count})`);
-							// fetch detailed uses from the list endpoint (small list expected)
-							try {
-								const listResp = await fetch(`/api/scans/list`);
-								const listJson = await listResp.json().catch(() => []);
-								if (Array.isArray(listJson)) {
-									// try to find by hash (if parsed hash) or by exact text
-									const key = (parsedRes.fields && (parsedRes.fields.hash || parsedRes.fields.hash)) || null;
-									let found = null as any;
-									if (key) found = listJson.find((r: any) => (r.parsed && (r.parsed.hash === key)) || r.key === key || r.text === text);
-									if (!found) found = listJson.find((r: any) => r.text === text);
-									if (found && Array.isArray(found.uses)) {
-										setLastUses(found.uses.map((u: any) => new Date(u.at).toLocaleString()));
-									} else {
-										setLastUses(null);
-									}
+					if (j && j.wasDuplicate) {
+						// show a toast notification about duplicate use
+						const prev = j.lastSeen
+							? new Date(j.lastSeen).toLocaleString()
+							: "unknown";
+						setToastMessage(
+							`Duplicate scan — previously used at ${prev} (count: ${j.count})`
+						);
+						// fetch detailed uses from the list endpoint (small list expected)
+						try {
+							const listResp = await fetch(`/api/scans/list`);
+							const listJson = await listResp.json().catch(() => []);
+							if (Array.isArray(listJson)) {
+								// try to find by hash (if parsed hash) or by exact text
+								const key =
+									(parsedRes.fields &&
+										(parsedRes.fields.hash || parsedRes.fields.hash)) ||
+									null;
+								let found = null as any;
+								if (key)
+									found = listJson.find(
+										(r: any) =>
+											(r.parsed && r.parsed.hash === key) ||
+											r.key === key ||
+											r.text === text
+									);
+								if (!found) found = listJson.find((r: any) => r.text === text);
+								if (found && Array.isArray(found.uses)) {
+									setLastUses(
+										found.uses.map((u: any) => new Date(u.at).toLocaleString())
+									);
+								} else {
+									setLastUses(null);
 								}
-							} catch (e) {
-								// ignore list fetch errors
 							}
+						} catch (e) {
+							// ignore list fetch errors
 						}
+					}
 				} catch (e) {
 					// ignore network errors
 				}
