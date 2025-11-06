@@ -1,103 +1,239 @@
-import Image from "next/image";
+"use client";
+
+import React, { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
+import jsQR from "jsqr";
 
 export default function Home() {
-  return (
-    <div className="grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20 font-[family-name:var(--font-geist-sans)]">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="list-inside list-decimal text-sm/6 text-center sm:text-left font-[family-name:var(--font-geist-mono)]">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] px-1 py-0.5 rounded font-[family-name:var(--font-geist-mono)] font-semibold">
-              app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const detectorRef = useRef<any>(null);
+  const [scanning, setScanning] = useState(false);
+  const [lastResult, setLastResult] = useState<string | null>(null);
+  const [history, setHistory] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+  useEffect(() => {
+    // create BarcodeDetector if available
+    const BD = (globalThis as any).BarcodeDetector;
+    if (BD) {
+      try {
+        // QR format only
+        detectorRef.current = new BD({ formats: ["qr_code"] });
+      } catch (e) {
+        // ignore
+        detectorRef.current = null;
+      }
+    }
+
+    return () => {
+      stopScanning();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const startScanning = async () => {
+    setError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" },
+        audio: false,
+      });
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+
+      setScanning(true);
+      tick();
+    } catch (err: any) {
+      setError(err?.message || String(err));
+    }
+  };
+
+  const stopScanning = () => {
+    if (rafRef.current) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (videoRef.current) {
+      const s = videoRef.current.srcObject as MediaStream | null;
+      if (s) {
+        s.getTracks().forEach((t) => t.stop());
+      }
+      videoRef.current.pause();
+      videoRef.current.srcObject = null;
+    }
+    setScanning(false);
+  };
+
+  const tick = async () => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+    if (width === 0 || height === 0) {
+      rafRef.current = requestAnimationFrame(tick);
+      return;
+    }
+
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, width, height);
+
+    // Try BarcodeDetector first
+    try {
+      const detector = detectorRef.current;
+      if (detector) {
+        // Pass the canvas element directly
+        const barcodes = await detector.detect(canvas as any);
+        if (barcodes && barcodes.length > 0) {
+          const raw = barcodes[0].rawValue || barcodes[0].raw?.value || "";
+          handleResult(raw);
+        }
+      } else {
+        // Fallback to jsQR
+        const imageData = ctx.getImageData(0, 0, width, height);
+        const code = jsQR(imageData.data, width, height);
+        if (code && code.data) {
+          handleResult(code.data);
+        }
+      }
+    } catch (e) {
+      // ignore per-frame errors
+    }
+
+    rafRef.current = requestAnimationFrame(tick);
+  };
+
+  const handleResult = (text: string) => {
+    if (!text) return;
+    setLastResult(text);
+    setHistory((h) => (h[0] === text ? h : [text, ...h].slice(0, 20)));
+  };
+
+  const clearHistory = () => setHistory([]);
+
+  const copyResult = async (t?: string) => {
+    try {
+      await navigator.clipboard.writeText(t || lastResult || "");
+    } catch (_) {
+      // fallback
+    }
+  };
+
+  const openIfUrl = (t?: string) => {
+    const txt = (t || lastResult || "").trim();
+    try {
+      const u = new URL(txt);
+      window.open(u.toString(), "_blank");
+    } catch (_) {
+      // not a url
+    }
+  };
+
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-start gap-6 p-6">
+      <h1 className="text-2xl font-semibold">QR Scanner</h1>
+
+      <div className="w-full max-w-3xl grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="flex flex-col gap-3">
+          <div className="bg-black/5 rounded overflow-hidden aspect-video flex items-center justify-center">
+            <video ref={videoRef} className="w-full h-full object-cover" muted playsInline />
+            <canvas ref={canvasRef} style={{ display: "none" }} />
+          </div>
+
+          <div className="flex gap-2">
+            {!scanning ? (
+              <button
+                className="px-4 py-2 bg-green-600 text-white rounded"
+                onClick={startScanning}
+              >
+                Start
+              </button>
+            ) : (
+              <button
+                className="px-4 py-2 bg-red-600 text-white rounded"
+                onClick={stopScanning}
+              >
+                Stop
+              </button>
+            )}
+
+            <button
+              className="px-4 py-2 bg-gray-200 rounded"
+              onClick={() => copyResult()}
+              disabled={!lastResult}
+            >
+              Copy
+            </button>
+
+            <button
+              className="px-4 py-2 bg-gray-200 rounded"
+              onClick={() => openIfUrl()}
+              disabled={!lastResult}
+            >
+              Open
+            </button>
+          </div>
+
+          {error && <div className="text-sm text-red-600">{error}</div>}
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+
+        <div className="flex flex-col gap-3">
+          <div className="p-3 border rounded min-h-[12rem] bg-white">
+            <h2 className="font-medium">Last result</h2>
+            <div className="mt-2 text-sm break-words">{lastResult ?? <em>No result yet</em>}</div>
+          </div>
+
+          <div className="p-3 border rounded bg-white flex-1">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-medium">History</h3>
+              <div className="flex gap-2">
+                <button
+                  className="px-2 py-1 text-sm bg-gray-100 rounded"
+                  onClick={clearHistory}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            <ul className="text-sm list-disc pl-5 max-h-56 overflow-auto">
+              {history.length === 0 && <li className="text-muted">No scans yet</li>}
+              {history.map((h, i) => (
+                <li key={i} className="mb-1 break-words">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex-1">{h}</div>
+                    <div className="flex gap-1">
+                      <button
+                        className="text-xs px-2 py-1 bg-gray-100 rounded"
+                        onClick={() => copyResult(h)}
+                      >
+                        Copy
+                      </button>
+                      <button
+                        className="text-xs px-2 py-1 bg-gray-100 rounded"
+                        onClick={() => openIfUrl(h)}
+                      >
+                        Open
+                      </button>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div className="text-xs text-gray-500 mt-4">Uses the browser BarcodeDetector API with a jsQR fallback.</div>
     </div>
   );
 }
