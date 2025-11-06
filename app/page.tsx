@@ -1,17 +1,275 @@
 "use client";
 
 import jsQR from "jsqr";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 export default function Home() {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 	const canvasRef = useRef<HTMLCanvasElement | null>(null);
 	const rafRef = useRef<number | null>(null);
 	const detectorRef = useRef<any>(null);
+	const imageCaptureRef = useRef<any>(null);
 	const [scanning, setScanning] = useState(false);
 	const [lastResult, setLastResult] = useState<string | null>(null);
-	const [history, setHistory] = useState<string[]>([]);
+	type HistoryEntry = {
+		text: string;
+		count: number;
+		firstSeen: string; // ISO
+		lastSeen: string; // ISO
+	};
+
+	const [history, setHistory] = useState<HistoryEntry[]>([]);
 	const [error, setError] = useState<string | null>(null);
+	const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+	const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+	const [singleScan, setSingleScan] = useState(false);
+	const [torchAvailable, setTorchAvailable] = useState(false);
+	const [torchOn, setTorchOn] = useState(false);
+
+	// parsed result state
+	const [parsed, setParsed] = useState<any | null>(null);
+	const [validationErrors, setValidationErrors] = useState<string[]>([]);
+
+	// parse a QR payload of the colon-separated format into fields and validate
+	const parseQrText = (text: string) => {
+		const errors: string[] = [];
+		const raw = (text || "").trim();
+		if (!raw) {
+			errors.push("Empty payload");
+			return { raw, kind: null, fields: null, errors };
+		}
+
+		// ignore trailing colon
+		const trimmed = raw.replace(/:$/g, "");
+
+		// QIT format detection
+		if (trimmed.startsWith("QIT:")) {
+			// find the QCODE marker start ('::Q') and the separator '::#:::#:'
+			const qStart = trimmed.indexOf("::Q");
+			const sep = "::#:::#:";
+			if (qStart === -1) {
+				errors.push("missing QCODE marker '::Q'");
+				return { raw, kind: "QIT", fields: null, errors };
+			}
+			const prefix = trimmed.slice(0, qStart);
+			const after = trimmed.slice(qStart + 2); // starts with Q...
+			const sepIdx = after.indexOf(sep);
+			if (sepIdx === -1) {
+				errors.push("missing QCODE separator '::#:::#:'");
+				return { raw, kind: "QIT", fields: null, errors };
+			}
+			const qcodePart = after.slice(0, sepIdx).replace(/:^|:$/g, "");
+			const unique = after.slice(sepIdx + sep.length).replace(/:$/g, "");
+
+			const p = prefix.split(":");
+			// expected: [QIT, Fxxx, RRDL####, TYPE, FARE, DEPART_DATETIME, ADULTS, CHILDREN, RETURN_DATETIME?]
+			const flight = p[1] ?? null;
+			const rrdl = p[2] ?? null;
+			const type = (p[3] ?? "").toUpperCase();
+			const fare = p[4] ?? null;
+			const depart = p[5] ?? null;
+			const adults = p[6] ?? null;
+			const children = p[7] ?? null;
+			const ret = p[8] ?? null;
+
+			// validations
+			if (!/^[A-Za-z0-9]+$/.test(flight || ""))
+				errors.push("flight: invalid code");
+			if (!/^RRDL[0-9]+$/.test(rrdl || ""))
+				errors.push("rrdl: invalid RRDL code");
+			if (!(type === "SINGLE" || type === "RETURN"))
+				errors.push("type: must be SINGLE or RETURN");
+			if (!/^[A-Z]{3,4}$/.test(fare || ""))
+				errors.push("fare: expected CST/CFL/CFLL-like code");
+
+			const parseDateTime = (s: string | null) => {
+				if (!s) return null;
+				if (!/^[0-9]{10}$/.test(s)) return null;
+				// DDMMYYHHMM
+				const dd = Number(s.slice(0, 2));
+				const mm = Number(s.slice(2, 4));
+				const yy = Number(s.slice(4, 6));
+				const hh = Number(s.slice(6, 8));
+				const min = Number(s.slice(8, 10));
+				if (dd < 1 || dd > 31) return null;
+				if (mm < 1 || mm > 12) return null;
+				if (hh < 0 || hh > 23) return null;
+				if (min < 0 || min > 59) return null;
+				// build date (assume 2000+)
+				const year = 2000 + yy;
+				const d = new Date(year, mm - 1, dd, hh, min);
+				if (isNaN(d.getTime())) return null;
+				return d;
+			};
+
+			const departDt = parseDateTime(depart);
+			const returnDt = ret ? parseDateTime(ret) : null;
+			if (!departDt) errors.push("depart: invalid DDMMYYHHMM");
+			if (type === "SINGLE" && ret)
+				errors.push("return must be empty for SINGLE tickets");
+			if (type === "RETURN") {
+				if (!returnDt)
+					errors.push(
+						"return: invalid or missing DDMMYYHHMM for RETURN ticket"
+					);
+				else if (departDt && returnDt < departDt)
+					errors.push("return: must be after or equal to depart");
+			}
+
+			// QIT date proximity rule: depart must not be more than 2 days in the future
+			if (departDt) {
+				const now = new Date();
+				const msDiff = departDt.getTime() - now.getTime();
+				const twoDaysMs = 2 * 24 * 60 * 60 * 1000;
+				if (msDiff > twoDaysMs)
+					errors.push("depart: more than 2 days away from now");
+			}
+
+			const nAdults = Number(adults);
+			const nChildren = Number(children);
+			if (!/^[0-9]+$/.test(adults ?? ""))
+				errors.push("adults: must be integer >= 0");
+			if (!/^[0-9]+$/.test(children ?? ""))
+				errors.push("children: must be integer >= 0");
+
+			if (!/^[0-9a-fA-F]{16,32}$/.test(unique || ""))
+				errors.push("hash: invalid hex id");
+			if (!/^Q[A-Za-z0-9]+$/.test(qcodePart || ""))
+				errors.push("qcode: invalid format");
+
+			const fields: any = {
+				flight,
+				rrdl,
+				type,
+				fare,
+				depart: depart ?? null,
+				return: ret ?? null,
+				adults: Number.isNaN(nAdults) ? null : nAdults,
+				children: Number.isNaN(nChildren) ? null : nChildren,
+				qcode: qcodePart ?? null,
+				hash: unique ?? null,
+			};
+
+			return { raw, kind: "QIT", fields, errors };
+		}
+
+		// short ticket parse: look for the ::#: markers
+		const marker = "::#:";
+		if (trimmed.indexOf(marker) === -1) {
+			errors.push("missing '::#:' markers for short format");
+			return { raw, kind: "short", fields: null, errors };
+		}
+
+		const parts = trimmed.split(marker);
+		// expecting at least 3 parts: prefix, refs, hash
+		if (parts.length < 3) {
+			errors.push("unexpected short format segmentation");
+			return { raw, kind: "short", fields: null, errors };
+		}
+
+		const prefix = parts[0];
+		const refsPart = parts[1];
+		const hashPart = parts.slice(2).join(marker); // in case extra markers
+
+		const fieldsArr = prefix.split(":");
+		// fieldsArr: [ticketNo, depart, return?, type, adults, children, fare, ...]
+		const ticketNo = fieldsArr[0] ?? null;
+		const depart = fieldsArr[1] ?? null;
+		const ret = fieldsArr[2] ?? null;
+		const type = (fieldsArr[3] ?? "").toLowerCase();
+		const adults = fieldsArr[4] ?? null;
+		const children = fieldsArr[5] ?? null;
+		const fare = fieldsArr[6] ?? null;
+
+		// bus refs: split by ':' and filter 4-letter codes
+		const refs = (refsPart || "")
+			.split(":")
+			.filter((s) => !!s)
+			.map((s) => s.trim())
+			.filter(Boolean);
+
+		const hash = (hashPart || "").replace(/:$/g, "");
+
+		// validations
+		if (!/^[A-Z][A-Z0-9]{3,11}$/.test(ticketNo || ""))
+			errors.push("ticketNo: invalid format");
+
+		const parseMMDD = (s: string | undefined) => {
+			if (!s || !/^[0-9]{4}$/.test(s)) return false;
+			const dd = Number(s.slice(0, 2));
+			const mm = Number(s.slice(2, 4));
+			if (mm < 1 || mm > 12) return false;
+			if (dd < 1 || dd > 31) return false;
+			return true;
+		};
+
+		if (!parseMMDD(depart)) errors.push("depart: invalid DDMM");
+		if (type === "single") {
+			if (ret) {
+				// empty expected
+				if (ret.trim() !== "")
+					errors.push("return: must be empty for single tickets");
+			}
+		} else if (type === "return") {
+			if (!parseMMDD(ret))
+				errors.push("return: invalid DDMM for return ticket");
+			else {
+				// compare MMDD naive by month/day
+				const depMonth = Number(depart?.slice(2, 4));
+				const depDay = Number(depart?.slice(0, 2));
+				const retMonth = Number(ret?.slice(2, 4));
+				const retDay = Number(ret?.slice(0, 2));
+				const depVal = depMonth * 100 + depDay;
+				const retVal = retMonth * 100 + retDay;
+				if (retVal < depVal) errors.push("return: must not be before depart");
+			}
+		} else {
+			errors.push("type: must be single or return");
+		}
+
+		// Short ticket rule: depart must be today's date (DDMM)
+		try {
+			const now = new Date();
+			const dd = String(now.getDate()).padStart(2, "0");
+			const mm = String(now.getMonth() + 1).padStart(2, "0");
+			const todayDDMM = dd + mm;
+			if (depart !== todayDDMM) {
+				errors.push("depart: ticket not for today");
+			}
+		} catch (e) {
+			// ignore date compare errors
+		}
+
+		if (!/^[0-9]+$/.test(adults ?? ""))
+			errors.push("adults: must be integer >= 0");
+		if (!/^[0-9]+$/.test(children ?? ""))
+			errors.push("children: must be integer >= 0");
+
+		if (!/^(CST|CFL|CFLL)$/.test(fare ?? ""))
+			errors.push("fare: must be CST, CFL, or CFLL");
+
+		// validate refs
+		const badRefs = refs.filter((r) => !/^[A-Z]{4}$/.test(r));
+		if (badRefs.length > 0)
+			errors.push("refs: invalid bus reference codes: " + badRefs.join(","));
+
+		if (!/^[0-9a-fA-F]{16,32}$/.test(hash || ""))
+			errors.push("hash: invalid hex id");
+
+		const fields = {
+			ticketNo,
+			depart,
+			return: ret && ret !== "" ? ret : null,
+			type,
+			adults: /^[0-9]+$/.test(adults ?? "") ? Number(adults) : null,
+			children: /^[0-9]+$/.test(children ?? "") ? Number(children) : null,
+			fare,
+			refs,
+			hash,
+		};
+
+		return { raw, kind: "short", fields, errors };
+	};
 
 	useEffect(() => {
 		// create BarcodeDetector if available
@@ -26,31 +284,75 @@ export default function Home() {
 			}
 		}
 
+		// enumerate devices so user can pick a camera
+		(async () => {
+			try {
+				const list = await navigator.mediaDevices.enumerateDevices();
+				const videoInputs = list.filter((d) => d.kind === "videoinput");
+				setDevices(videoInputs);
+				if (videoInputs.length > 0)
+					setSelectedDeviceId(videoInputs[0].deviceId || null);
+			} catch (e) {
+				// ignore
+			}
+		})();
+
 		return () => {
 			stopScanning();
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
-	const startScanning = async () => {
-		setError(null);
-		try {
-			const stream = await navigator.mediaDevices.getUserMedia({
-				video: { facingMode: "environment" },
-				audio: false,
-			});
+	const startScanning = useCallback(
+		async (deviceId?: string | null) => {
+			setError(null);
+			try {
+				// stop existing stream first
+				if (videoRef.current) {
+					const existing = videoRef.current.srcObject as MediaStream | null;
+					if (existing) existing.getTracks().forEach((t) => t.stop());
+				}
 
-			if (videoRef.current) {
-				videoRef.current.srcObject = stream;
-				await videoRef.current.play();
+				const constraints: MediaStreamConstraints = {
+					audio: false,
+					video: deviceId
+						? { deviceId: { exact: deviceId } }
+						: { facingMode: "environment" },
+				};
+
+				const stream = await navigator.mediaDevices.getUserMedia(constraints);
+
+				if (videoRef.current) {
+					videoRef.current.srcObject = stream;
+					await videoRef.current.play();
+				}
+
+				// detect torch availability
+				const track = stream.getVideoTracks()[0];
+				try {
+					const caps = track.getCapabilities?.();
+					if (caps && (caps as any).torch) {
+						setTorchAvailable(true);
+						imageCaptureRef.current = { track };
+					} else {
+						setTorchAvailable(false);
+						imageCaptureRef.current = null;
+					}
+				} catch (e) {
+					setTorchAvailable(false);
+					imageCaptureRef.current = null;
+				}
+
+				setScanning(true);
+				rafRef.current = null;
+				tick();
+			} catch (err: any) {
+				setError(err?.message || String(err));
 			}
-
-			setScanning(true);
-			tick();
-		} catch (err: any) {
-			setError(err?.message || String(err));
-		}
-	};
+		},
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+		[]
+	);
 
 	const stopScanning = () => {
 		if (rafRef.current) {
@@ -65,6 +367,8 @@ export default function Home() {
 			videoRef.current.pause();
 			videoRef.current.srcObject = null;
 		}
+		// reset torch state
+		setTorchOn(false);
 		setScanning(false);
 	};
 
@@ -114,7 +418,60 @@ export default function Home() {
 	const handleResult = (text: string) => {
 		if (!text) return;
 		setLastResult(text);
-		setHistory((h) => (h[0] === text ? h : [text, ...h].slice(0, 20)));
+
+		const now = new Date().toISOString();
+
+		setHistory((prev) => {
+			// check for existing entry (exact match)
+			const idx = prev.findIndex((e) => e.text === text);
+			if (idx >= 0) {
+				const updated = [...prev];
+				const existing = updated[idx];
+				const bumped: HistoryEntry = {
+					...existing,
+					count: existing.count + 1,
+					lastSeen: now,
+				};
+				// move to front
+				updated.splice(idx, 1);
+				return [bumped, ...updated].slice(0, 200);
+			}
+
+			const entry: HistoryEntry = {
+				text,
+				count: 1,
+				firstSeen: now,
+				lastSeen: now,
+			};
+			return [entry, ...prev].slice(0, 200);
+		});
+
+		if (singleScan) {
+			stopScanning();
+		}
+		// parse and post to server to save
+		try {
+			const parsedRes = parseQrText(text);
+			setParsed(parsedRes.fields ?? null);
+			setValidationErrors(parsedRes.errors ?? []);
+
+			// fire-and-forget post
+			fetch("/api/scans", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					text,
+					parsed: parsedRes.fields,
+					firstSeen: new Date().toISOString(),
+					lastSeen: new Date().toISOString(),
+					count: 1,
+				}),
+			}).catch(() => {
+				/* ignore network errors for now */
+			});
+		} catch (e) {
+			// ignore parsing/post errors
+		}
 	};
 
 	const clearHistory = () => setHistory([]);
@@ -137,13 +494,68 @@ export default function Home() {
 		}
 	};
 
+	// toggle torch/flash if available
+	const toggleTorch = async () => {
+		try {
+			const obj = imageCaptureRef.current;
+			if (!obj || !obj.track) return;
+			const track = obj.track as MediaStreamTrack;
+			const capabilities = track.getCapabilities?.() as any;
+			if (!capabilities || !capabilities.torch) return;
+			// applyConstraints typing doesn't include torch — cast to any
+			await (track as any).applyConstraints({
+				advanced: [{ torch: !torchOn }],
+			});
+			setTorchOn((v) => !v);
+		} catch (e) {
+			// ignore
+		}
+	};
+
+	// keyboard shortcuts
+	useEffect(() => {
+		const onKey = (e: KeyboardEvent) => {
+			if (e.code === "Space") {
+				e.preventDefault();
+				if (scanning) stopScanning();
+				else startScanning(selectedDeviceId);
+			}
+			if (e.key === "c") copyResult();
+			if (e.key === "o") openIfUrl();
+			if (e.key === "s") setSingleScan((v) => !v);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [scanning, selectedDeviceId]);
+
+	// restart stream when device selected while scanning
+	useEffect(() => {
+		if (scanning) {
+			startScanning(selectedDeviceId);
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [selectedDeviceId]);
+
+	// parse and validate lastResult whenever it changes
+	useEffect(() => {
+		if (!lastResult) {
+			setParsed(null);
+			setValidationErrors([]);
+			return;
+		}
+		const res = parseQrText(lastResult);
+		setParsed(res.fields ?? null);
+		setValidationErrors(res.errors ?? []);
+	}, [lastResult]);
+
 	return (
-		<div className="min-h-screen flex flex-col items-center justify-start gap-6 p-6">
+		<div className="min-h-screen flex flex-col items-center justify-start gap-6 p-6 bg-gradient-to-b from-gray-50 to-gray-100">
 			<h1 className="text-2xl font-semibold">QR Scanner</h1>
 
 			<div className="w-full max-w-3xl grid grid-cols-1 md:grid-cols-2 gap-4">
 				<div className="flex flex-col gap-3">
-					<div className="bg-black/5 rounded overflow-hidden aspect-video flex items-center justify-center">
+					<div className="bg-gray-100 rounded overflow-hidden aspect-video flex items-center justify-center relative shadow-sm">
 						<video
 							ref={videoRef}
 							className="w-full h-full object-cover"
@@ -151,13 +563,58 @@ export default function Home() {
 							playsInline
 						/>
 						<canvas ref={canvasRef} style={{ display: "none" }} />
+
+						{/* visual overlay to help user aim */}
+						<div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+							<div className="w-2/3 h-2/3 border-2 border-gray-300 rounded-md shadow-sm bg-white/30"></div>
+						</div>
 					</div>
 
-					<div className="flex gap-2">
+					<div className="flex flex-wrap items-center gap-2">
+						{/* Camera selector */}
+						{devices.length > 0 && (
+							<select
+								value={selectedDeviceId ?? ""}
+								onChange={(e) => setSelectedDeviceId(e.target.value || null)}
+								className="px-2 py-1 border rounded"
+							>
+								{devices.map((d) => (
+									<option key={d.deviceId} value={d.deviceId}>
+										{d.label || `Camera ${d.deviceId.slice(-4)}`}
+									</option>
+								))}
+							</select>
+						)}
+
+						{/* Single-scan toggle */}
+						<button
+							className={`px-2 py-1 rounded border ${
+								singleScan ? "bg-yellow-100" : "bg-white"
+							}`}
+							onClick={() => setSingleScan((v) => !v)}
+							title="Toggle single-scan mode (press 's')"
+						>
+							{singleScan ? "Single" : "Continuous"}
+						</button>
+
+						{/* Torch toggle if supported */}
+						{torchAvailable && (
+							<button
+								className={`px-2 py-1 rounded border ${
+									torchOn ? "bg-yellow-200" : "bg-white"
+								}`}
+								onClick={toggleTorch}
+								title="Toggle torch/flash"
+							>
+								{torchOn ? "Torch On" : "Torch Off"}
+							</button>
+						)}
+
+						{/* Start / Stop */}
 						{!scanning ? (
 							<button
 								className="px-4 py-2 bg-green-600 text-white rounded"
-								onClick={startScanning}
+								onClick={() => startScanning(selectedDeviceId)}
 							>
 								Start
 							</button>
@@ -192,9 +649,80 @@ export default function Home() {
 
 				<div className="flex flex-col gap-3">
 					<div className="p-3 border rounded min-h-[12rem] bg-white">
-						<h2 className="font-medium">Last result</h2>
+						<div className="flex items-center justify-between">
+							<h2 className="font-medium">Last result</h2>
+							<div>
+								{lastResult ? (
+									<span
+										className={`px-2 py-1 text-xs rounded ${
+											validationErrors.length === 0
+												? "bg-green-100 text-green-800"
+												: "bg-red-100 text-red-800"
+										}`}
+									>
+										{validationErrors.length === 0 ? "Valid" : "Invalid"}
+									</span>
+								) : null}
+							</div>
+						</div>
+
 						<div className="mt-2 text-sm break-words">
-							{lastResult ?? <em>No result yet</em>}
+							{!lastResult ? (
+								<em>No result yet</em>
+							) : (
+								<div className="space-y-2">
+									<div className="font-mono text-xs bg-gray-50 p-2 rounded">
+										{lastResult}
+									</div>
+									{parsed ? (
+										<div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
+											<div>
+												<div className="text-xs text-gray-600">ID</div>
+												<div className="font-medium">{parsed.id}</div>
+											</div>
+											<div>
+												<div className="text-xs text-gray-600">From</div>
+												<div className="font-medium">{parsed.from}</div>
+											</div>
+											<div>
+												<div className="text-xs text-gray-600">To</div>
+												<div className="font-medium">{parsed.to}</div>
+											</div>
+											<div>
+												<div className="text-xs text-gray-600">Action</div>
+												<div className="font-medium">{parsed.action}</div>
+											</div>
+											<div className="sm:col-span-2">
+												<div className="text-xs text-gray-600">Flags</div>
+												<div className="font-mono text-sm">
+													{parsed.flag1} : {parsed.flag2}
+												</div>
+											</div>
+											<div className="sm:col-span-2">
+												<div className="text-xs text-gray-600">Codes</div>
+												<div className="text-sm break-words">
+													{(parsed.codes || []).join(":")}
+												</div>
+											</div>
+											<div className="sm:col-span-2">
+												<div className="text-xs text-gray-600">Signature</div>
+												<div className="font-mono text-sm break-words">
+													{parsed.signature}
+												</div>
+											</div>
+										</div>
+									) : null}
+									{validationErrors.length > 0 && (
+										<div className="mt-2 text-sm text-red-700">
+											<ul className="list-disc pl-5">
+												{validationErrors.map((e, i) => (
+													<li key={i}>{e}</li>
+												))}
+											</ul>
+										</div>
+									)}
+								</div>
+							)}
 						</div>
 					</div>
 
@@ -211,24 +739,39 @@ export default function Home() {
 							</div>
 						</div>
 
-						<ul className="text-sm list-disc pl-5 max-h-56 overflow-auto">
+						<ul className="text-sm pl-0 max-h-56 overflow-auto">
 							{history.length === 0 && (
-								<li className="text-muted">No scans yet</li>
+								<li className="text-muted list-none">No scans yet</li>
 							)}
-							{history.map((h, i) => (
-								<li key={i} className="mb-1 break-words">
+							{history.map((entry, i) => (
+								<li key={i} className="mb-2 break-words list-none">
 									<div className="flex items-start justify-between gap-2">
-										<div className="flex-1">{h}</div>
+										<div className="flex-1">
+											<div className="flex items-center gap-2">
+												<span className="font-mono text-sm break-words">
+													{entry.text}
+												</span>
+												{entry.count > 1 && (
+													<span className="text-xs px-2 py-1 bg-yellow-100 text-yellow-800 rounded">
+														Used {entry.count}×
+													</span>
+												)}
+											</div>
+											<div className="text-xs text-gray-500 mt-1">
+												First: {new Date(entry.firstSeen).toLocaleString()} •
+												Last: {new Date(entry.lastSeen).toLocaleString()}
+											</div>
+										</div>
 										<div className="flex gap-1">
 											<button
 												className="text-xs px-2 py-1 bg-gray-100 rounded"
-												onClick={() => copyResult(h)}
+												onClick={() => copyResult(entry.text)}
 											>
 												Copy
 											</button>
 											<button
 												className="text-xs px-2 py-1 bg-gray-100 rounded"
-												onClick={() => openIfUrl(h)}
+												onClick={() => openIfUrl(entry.text)}
 											>
 												Open
 											</button>
