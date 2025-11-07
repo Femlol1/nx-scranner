@@ -29,9 +29,30 @@ export default function Home() {
 
 	// parsed result state
 	const [parsed, setParsed] = useState<any | null>(null);
+	const [parsedKind, setParsedKind] = useState<string | null>(null);
 	const [validationErrors, setValidationErrors] = useState<string[]>([]);
 	const [toastMessage, setToastMessage] = useState<string>("");
 	const [lastUses, setLastUses] = useState<string[] | null>(null);
+	const [pulse, setPulse] = useState(false);
+	const pulseTimerRef = useRef<number | null>(null);
+
+	// helper to format QIT DDMMYYHHMM into a readable date
+	const formatQITDate = (s?: string | null) => {
+		try {
+			if (!s) return "-";
+			if (!/^[0-9]{10}$/.test(s)) return s;
+			const dd = Number(s.slice(0, 2));
+			const mm = Number(s.slice(2, 4));
+			const yy = Number(s.slice(4, 6));
+			const hh = Number(s.slice(6, 8));
+			const min = Number(s.slice(8, 10));
+			const d = new Date(2000 + yy, mm - 1, dd, hh, min);
+			if (isNaN(d.getTime())) return s;
+			return d.toLocaleString();
+		} catch {
+			return s || "-";
+		}
+	};
 
 	// theme: 'light' | 'dark' | null (null = follow system)
 	const [theme, setTheme] = useState<string | null>(null);
@@ -75,22 +96,24 @@ export default function Home() {
 				errors.push("missing QCODE separator '::#:::#:'");
 				return { raw, kind: "QIT", fields: null, errors };
 			}
-			const qcodePart = after.slice(0, sepIdx).replace(/:^|:$/g, "");
-			const unique = after.slice(sepIdx + sep.length).replace(/:$/g, "");
+			const qcodePart = after.slice(0, sepIdx).replace(/:^|:$/g, "").trim();
+			const unique = after.slice(sepIdx + sep.length).replace(/:$/g, "").trim();
 
 			const p = prefix.split(":");
+			const token = (i: number) => ((p[i] ?? "") as string).trim();
 			// expected: [QIT, Fxxx, RRDL####, TYPE, FARE, DEPART_DATETIME, ADULTS, CHILDREN, RETURN_DATETIME?]
-			const flight = p[1] ?? null;
-			const rrdl = p[2] ?? null;
-			const type = (p[3] ?? "").toUpperCase();
-			const fare = p[4] ?? null;
-			const depart = p[5] ?? null;
-			const adults = p[6] ?? null;
-			const children = p[7] ?? null;
-			const ret = p[8] ?? null;
+			const flight = token(1) || null;
+			const rrdl = token(2) || null;
+			const type = token(3).toUpperCase();
+			const fare = token(4) || null;
+			const depart = token(5) || null;
+			const adults = token(6) || null;
+			const children = token(7) || null;
+			const ret = token(8) || null;
 
 			// validations
-			if (!/^[A-Za-z0-9]+$/.test(flight || ""))
+			const flightNorm = (flight || "").replace(/\s+/g, "");
+			if (!/^[A-Za-z0-9]+$/.test(flightNorm))
 				errors.push("flight: invalid code");
 			if (!/^RRDL[0-9]+$/.test(rrdl || ""))
 				errors.push("rrdl: invalid RRDL code");
@@ -208,8 +231,9 @@ export default function Home() {
 		const hash = (hashPart || "").replace(/:$/g, "");
 
 		// validations
-		if (!/^[A-Z][A-Z0-9]{3,11}$/.test(ticketNo || ""))
-			errors.push("ticketNo: invalid format");
+		// ticketNo rule: any 8-character alphanumeric (does not need to start with EU)
+		if (!/^[A-Za-z0-9]{8}$/.test((ticketNo || "").trim()))
+			errors.push("ticketNo: must be 8 letters/numbers");
 
 		const parseMMDD = (s: string | undefined) => {
 			if (!s || !/^[0-9]{4}$/.test(s)) return false;
@@ -244,14 +268,18 @@ export default function Home() {
 			errors.push("type: must be single or return");
 		}
 
-		// Short ticket rule: depart must be today's date (DDMM)
+		// Short ticket rule: valid if either depart is today OR (type===return and return is today)
 		try {
 			const now = new Date();
 			const dd = String(now.getDate()).padStart(2, "0");
 			const mm = String(now.getMonth() + 1).padStart(2, "0");
 			const todayDDMM = dd + mm;
-			if (depart !== todayDDMM) {
-				errors.push("depart: ticket not for today");
+			const isReturnType = type === "return";
+			const isDepartToday = depart === todayDDMM;
+			const isReturnToday = (ret && ret === todayDDMM) || false;
+			if (!(isDepartToday || (isReturnType && isReturnToday))) {
+				// neither depart nor (return when return ticket) match today
+				errors.push("date: ticket not valid for today");
 			}
 		} catch (e) {
 			// ignore date compare errors
@@ -483,6 +511,7 @@ export default function Home() {
 		try {
 			const parsedRes = parseQrText(text);
 			setParsed(parsedRes.fields ?? null);
+			setParsedKind(parsedRes.kind ?? null);
 			setValidationErrors(parsedRes.errors ?? []);
 
 			// post and check server response for duplicate metadata
@@ -615,11 +644,13 @@ export default function Home() {
 	useEffect(() => {
 		if (!lastResult) {
 			setParsed(null);
+			setParsedKind(null);
 			setValidationErrors([]);
 			return;
 		}
 		const res = parseQrText(lastResult);
 		setParsed(res.fields ?? null);
+		setParsedKind(res.kind ?? null);
 		setValidationErrors(res.errors ?? []);
 	}, [lastResult]);
 
@@ -739,7 +770,25 @@ export default function Home() {
 				</div>
 
 				<div className="flex flex-col gap-3">
-					<div className="p-3 border rounded min-h-[12rem] bg-panel border-default">
+					<div
+						className={`p-3 border rounded min-h-[12rem] transition-colors duration-200 relative overflow-hidden ${
+							lastResult
+								? validationErrors.length === 0
+									? "bg-green-50 border-green-300"
+									: "bg-red-50 border-red-300"
+								: "bg-panel border-default"
+						}`}
+					>
+						{/* Pulsing overlay when a new valid or invalid result is shown */}
+						{lastResult && (
+							<div
+								className={`absolute inset-0 pointer-events-none transition-opacity duration-700 ${
+									validationErrors.length === 0
+										? "animate-[pulseGlow_2s_ease-in-out_infinite] bg-green-200/20"
+										: "animate-[pulseGlow_2s_ease-in-out_infinite] bg-red-200/20"
+								}`}
+							/>
+						)}
 						<div className="flex items-center justify-between">
 							<h2 className="font-medium">Last result</h2>
 							<div>
@@ -766,41 +815,117 @@ export default function Home() {
 										{lastResult}
 									</div>
 									{parsed ? (
-										<div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2">
-											<div>
-												<div className="text-xs text-gray-600">ID</div>
-												<div className="font-medium">{parsed.id}</div>
+										<div className="mt-2 space-y-4">
+											{/* Format label */}
+											<div className="flex items-center gap-2 text-xs uppercase tracking-wide text-gray-500">
+												<span className="px-2 py-0.5 rounded bg-muted">
+													Format
+												</span>
+												<span className="font-mono">{parsedKind || "?"}</span>
 											</div>
-											<div>
-												<div className="text-xs text-gray-600">From</div>
-												<div className="font-medium">{parsed.from}</div>
-											</div>
-											<div>
-												<div className="text-xs text-gray-600">To</div>
-												<div className="font-medium">{parsed.to}</div>
-											</div>
-											<div>
-												<div className="text-xs text-gray-600">Action</div>
-												<div className="font-medium">{parsed.action}</div>
-											</div>
-											<div className="sm:col-span-2">
-												<div className="text-xs text-gray-600">Flags</div>
-												<div className="font-mono text-sm">
-													{parsed.flag1} : {parsed.flag2}
+
+											{/* High-level identifiers */}
+											<div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+												<div className="p-2 rounded bg-panel-quiet">
+													<div className="text-[10px] font-semibold text-gray-600">
+														ID / Ticket
+													</div>
+													<div className="font-mono text-sm break-words">
+														{parsed.ticketNo ||
+															parsed.flight ||
+															parsed.id ||
+															"-"}
+													</div>
+												</div>
+												<div className="p-2 rounded bg-panel-quiet">
+													<div className="text-[10px] font-semibold text-gray-600">
+														Type
+													</div>
+													<div className="text-sm">{parsed.type || "-"}</div>
+												</div>
+												<div className="p-2 rounded bg-panel-quiet">
+													<div className="text-[10px] font-semibold text-gray-600">
+														Fare
+													</div>
+													<div className="text-sm">{parsed.fare || "-"}</div>
 												</div>
 											</div>
-											<div className="sm:col-span-2">
-												<div className="text-xs text-gray-600">Codes</div>
-												<div className="text-sm break-words">
-													{(parsed.codes || []).join(":")}
+
+											{/* Date info */}
+											<div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+												<div className="p-2 rounded bg-panel-quiet">
+													<div className="text-[10px] font-semibold text-gray-600">
+														Depart
+													</div>
+													<div className="text-sm break-words">
+														{formatQITDate(parsed.depart) ||
+															parsed.depart ||
+															"-"}
+													</div>
+												</div>
+												<div className="p-2 rounded bg-panel-quiet">
+													<div className="text-[10px] font-semibold text-gray-600">
+														Return
+													</div>
+													<div className="text-sm break-words">
+														{formatQITDate(parsed.return) ||
+															parsed.return ||
+															"-"}
+													</div>
 												</div>
 											</div>
-											<div className="sm:col-span-2">
-												<div className="text-xs text-gray-600">Signature</div>
-												<div className="font-mono text-sm break-words">
-													{parsed.signature}
+
+											{/* Counts & pax */}
+											<div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+												<div className="p-2 rounded bg-panel-quiet">
+													<div className="text-[10px] font-semibold text-gray-600">
+														Adults
+													</div>
+													<div className="text-sm">{parsed.adults ?? "-"}</div>
+												</div>
+												<div className="p-2 rounded bg-panel-quiet">
+													<div className="text-[10px] font-semibold text-gray-600">
+														Children
+													</div>
+													<div className="text-sm">
+														{parsed.children ?? "-"}
+													</div>
 												</div>
 											</div>
+
+											{/* References / codes */}
+											{parsed.refs && parsed.refs.length > 0 && (
+												<div className="p-2 rounded bg-panel-quiet">
+													<div className="text-[10px] font-semibold text-gray-600">
+														Refs
+													</div>
+													<div className="font-mono text-xs break-words">
+														{parsed.refs.join(" : ")}
+													</div>
+												</div>
+											)}
+
+											{/* Hash / signature */}
+											{parsed.hash && (
+												<div className="p-2 rounded bg-panel-quiet">
+													<div className="text-[10px] font-semibold text-gray-600">
+														Hash
+													</div>
+													<div className="font-mono text-xs break-all">
+														{parsed.hash}
+													</div>
+												</div>
+											)}
+											{parsed.signature && (
+												<div className="p-2 rounded bg-panel-quiet">
+													<div className="text-[10px] font-semibold text-gray-600">
+														Signature
+													</div>
+													<div className="font-mono text-xs break-words">
+														{parsed.signature}
+													</div>
+												</div>
+											)}
 										</div>
 									) : null}
 									{validationErrors.length > 0 && (
