@@ -39,15 +39,26 @@ export default function Home() {
 	const formatQITDate = (s?: string | null) => {
 		try {
 			if (!s) return "-";
-			if (!/^[0-9]{10}$/.test(s)) return s;
-			const dd = Number(s.slice(0, 2));
-			const mm = Number(s.slice(2, 4));
-			const yy = Number(s.slice(4, 6));
-			const hh = Number(s.slice(6, 8));
-			const min = Number(s.slice(8, 10));
-			const d = new Date(2000 + yy, mm - 1, dd, hh, min);
-			if (isNaN(d.getTime())) return s;
-			return d.toLocaleString();
+			// support 10-digit DDMMYYHHMM and 6-digit DDMMYY (00:00 assumed)
+			if (/^[0-9]{10}$/.test(s)) {
+				const dd = Number(s.slice(0, 2));
+				const mm = Number(s.slice(2, 4));
+				const yy = Number(s.slice(4, 6));
+				const hh = Number(s.slice(6, 8));
+				const min = Number(s.slice(8, 10));
+				const d = new Date(2000 + yy, mm - 1, dd, hh, min);
+				if (isNaN(d.getTime())) return s;
+				return d.toLocaleString();
+			}
+			if (/^[0-9]{6}$/.test(s)) {
+				const dd = Number(s.slice(0, 2));
+				const mm = Number(s.slice(2, 4));
+				const yy = Number(s.slice(4, 6));
+				const d = new Date(2000 + yy, mm - 1, dd, 0, 0);
+				if (isNaN(d.getTime())) return s;
+				return d.toLocaleDateString();
+			}
+			return s;
 		} catch {
 			return s || "-";
 		}
@@ -79,86 +90,138 @@ export default function Home() {
 		// ignore trailing colon
 		const trimmed = raw.replace(/:$/g, "");
 
-		// QIT format detection
-		if (trimmed.startsWith("QIT:")) {
-			// find the QCODE marker start ('::Q') and the separator '::#:::#:'
-			const qStart = trimmed.indexOf("::Q");
+		// QIT/QCK (extended) format detection (supports adults;children combined and optional RRD)
+		if (trimmed.startsWith("QIT:") || trimmed.startsWith("QCK:")) {
+			const kindLabel = trimmed.startsWith("QCK:") ? "QCK" : "QIT";
+			// robustly locate the qcode and unique hash by first finding the separator '::#:::#:'
 			const sep = "::#:::#:";
-			if (qStart === -1) {
-				errors.push("missing QCODE marker '::Q'");
-				return { raw, kind: "QIT", fields: null, errors };
-			}
-			const prefix = trimmed.slice(0, qStart);
-			const after = trimmed.slice(qStart + 2); // starts with Q...
-			const sepIdx = after.indexOf(sep);
-			if (sepIdx === -1) {
+			const sepIdxAbs = trimmed.indexOf(sep);
+			if (sepIdxAbs === -1) {
 				errors.push("missing QCODE separator '::#:::#:'");
-				return { raw, kind: "QIT", fields: null, errors };
+				return { raw, kind: kindLabel, fields: null, errors };
 			}
-			const qcodePart = after.slice(0, sepIdx).replace(/:^|:$/g, "").trim();
-			const unique = after
-				.slice(sepIdx + sep.length)
-				.replace(/:$/g, "")
+			const preSep = trimmed.slice(0, sepIdxAbs);
+			const postSep = trimmed.slice(sepIdxAbs + sep.length);
+			const lastColon = preSep.lastIndexOf(":");
+			if (lastColon === -1) {
+				errors.push("malformed qcode section");
+				return { raw, kind: kindLabel, fields: null, errors };
+			}
+			const prefix = preSep.slice(0, lastColon);
+			const qcodePart = preSep
+				.slice(lastColon + 1)
+				.replace(/:^|:$/g, "")
 				.trim();
+			const unique = postSep.replace(/:$/g, "").trim();
 
-			const p = prefix.split(":");
-			const token = (i: number) => ((p[i] ?? "") as string).trim();
-			// expected: [QIT, Fxxx, RRDL####, TYPE, FARE, DEPART_DATETIME, ADULTS, CHILDREN, RETURN_DATETIME?]
-			const flight = token(1) || null;
-			const rrdl = token(2) || null;
-			const type = token(3).toUpperCase();
-			const fare = token(4) || null;
-			const depart = token(5) || null;
-			const adults = token(6) || null;
-			const children = token(7) || null;
-			const ret = token(8) || null;
+			const rawTokens = prefix.split(":").map((t) => t.trim());
+			// dynamic mapping: first token is kind (QIT/QCK)
+			const tokens = rawTokens.slice(1); // drop prefix token
+			let flight: string | null = null;
+			let rrdl: string | null = null;
+			let type: string | null = null;
+			let fare: string | null = null;
+			let purchase: string | null = null;
+			let adults: string | null = null;
+			let children: string | null = null;
+			let departTok: string | null = null;
+			let retTok: string | null = null;
+
+			// helpers
+			const isType = (v: string) => /^(SINGLE|RETURN)$/i.test(v);
+			const isFare = (v: string) => /^[A-Z]{3,4}$/.test(v);
+			const isDateTime = (v: string) =>
+				/^[0-9]{10}$/.test(v) || /^[0-9]{6}$/.test(v);
+			const isAdultsChildrenCombined = (v: string) => /^[0-9]+;[0-9]+$/.test(v);
+			const isRRD = (v: string) => /^RRD[A-Z0-9]+$/i.test(v);
+
+			let idx = 0;
+			// flight always first
+			flight = tokens[idx++] || null;
+			// optional RRD
+			if (tokens[idx] && isRRD(tokens[idx])) {
+				rrdl = tokens[idx++];
+			}
+			// type
+			if (tokens[idx] && isType(tokens[idx])) {
+				type = tokens[idx++].toUpperCase();
+			}
+			// fare
+			if (tokens[idx] && isFare(tokens[idx])) {
+				fare = tokens[idx++];
+			}
+			// purchase datetime
+			if (tokens[idx] && isDateTime(tokens[idx])) {
+				purchase = tokens[idx++];
+			}
+			// adults/children either combined or separate
+			if (tokens[idx] && isAdultsChildrenCombined(tokens[idx])) {
+				const [a, c] = tokens[idx++].split(";");
+				adults = a;
+				children = c;
+			} else {
+				if (tokens[idx] && /^[0-9]+$/.test(tokens[idx])) adults = tokens[idx++];
+				if (tokens[idx] && /^[0-9]+$/.test(tokens[idx]))
+					children = tokens[idx++];
+			}
+			// depart datetime
+			if (tokens[idx] && isDateTime(tokens[idx])) {
+				departTok = tokens[idx++];
+			}
+			// return datetime
+			if (tokens[idx] && isDateTime(tokens[idx])) {
+				retTok = tokens[idx++];
+			}
 
 			// validations
 			const flightNorm = (flight || "").replace(/\s+/g, "");
-			if (!/^[A-Za-z0-9]+$/.test(flightNorm))
+			if (!flightNorm || !/^[A-Za-z0-9]+$/.test(flightNorm))
 				errors.push("flight: invalid code");
-			if (!/^RRDL[0-9]+$/.test(rrdl || ""))
-				errors.push("rrdl: invalid RRDL code");
-			if (!(type === "SINGLE" || type === "RETURN"))
+			if (rrdl && !/^RRD[A-Z0-9]+$/.test(rrdl.toUpperCase()))
+				errors.push("rrd: invalid RRD reference code");
+			if (!type || !(type === "SINGLE" || type === "RETURN"))
 				errors.push("type: must be SINGLE or RETURN");
-			if (!/^[A-Z]{3,4}$/.test(fare || ""))
+			if (!fare || !/^[A-Z]{3,4}$/.test(fare))
 				errors.push("fare: expected CST/CFL/CFLL-like code");
 
 			const parseDateTime = (s: string | null) => {
 				if (!s) return null;
-				if (!/^[0-9]{10}$/.test(s)) return null;
-				// DDMMYYHHMM
+				// Accept 10-digit DDMMYYHHMM or 6-digit DDMMYY (00:00 assumed)
+				if (!/^[0-9]{10}$/.test(s) && !/^[0-9]{6}$/.test(s)) return null;
 				const dd = Number(s.slice(0, 2));
 				const mm = Number(s.slice(2, 4));
 				const yy = Number(s.slice(4, 6));
-				const hh = Number(s.slice(6, 8));
-				const min = Number(s.slice(8, 10));
+				const hh = s.length === 10 ? Number(s.slice(6, 8)) : 0;
+				const min = s.length === 10 ? Number(s.slice(8, 10)) : 0;
 				if (dd < 1 || dd > 31) return null;
 				if (mm < 1 || mm > 12) return null;
 				if (hh < 0 || hh > 23) return null;
 				if (min < 0 || min > 59) return null;
-				// build date (assume 2000+)
 				const year = 2000 + yy;
 				const d = new Date(year, mm - 1, dd, hh, min);
 				if (isNaN(d.getTime())) return null;
 				return d;
 			};
 
-			const departDt = parseDateTime(depart);
-			const returnDt = ret ? parseDateTime(ret) : null;
-			if (!departDt) errors.push("depart: invalid DDMMYYHHMM");
-			if (type === "SINGLE" && ret)
+			const purchaseDt = purchase ? parseDateTime(purchase) : null;
+			const departDt = departTok ? parseDateTime(departTok) : null;
+			const returnDt = retTok ? parseDateTime(retTok) : null;
+			if (!purchaseDt) errors.push("purchase: invalid date");
+			if (!departDt) errors.push("depart: invalid date");
+			if (purchaseDt && departDt && purchaseDt > departDt)
+				errors.push("purchase: must not be after depart");
+			if (type === "SINGLE" && retTok) {
 				errors.push("return must be empty for SINGLE tickets");
+			}
 			if (type === "RETURN") {
-				if (!returnDt)
-					errors.push(
-						"return: invalid or missing DDMMYYHHMM for RETURN ticket"
-					);
-				else if (departDt && returnDt < departDt)
+				if (!returnDt) {
+					errors.push("return: invalid or missing date for RETURN ticket");
+				} else if (departDt && returnDt < departDt) {
 					errors.push("return: must be after or equal to depart");
+				}
 			}
 
-			// QIT date proximity rule: depart must not be more than 2 days in the future
+			// Proximity rule (still applies): depart must not be >2 days in future
 			if (departDt) {
 				const now = new Date();
 				const msDiff = departDt.getTime() - now.getTime();
@@ -167,11 +230,10 @@ export default function Home() {
 					errors.push("depart: more than 2 days away from now");
 			}
 
-			const nAdults = Number(adults);
-			const nChildren = Number(children);
-			if (!/^[0-9]+$/.test(adults ?? ""))
+			// pax validation
+			if (adults && !/^[0-9]+$/.test(adults))
 				errors.push("adults: must be integer >= 0");
-			if (!/^[0-9]+$/.test(children ?? ""))
+			if (children && !/^[0-9]+$/.test(children))
 				errors.push("children: must be integer >= 0");
 
 			if (!/^[0-9a-fA-F]{16,32}$/.test(unique || ""))
@@ -179,20 +241,34 @@ export default function Home() {
 			if (!/^Q[A-Za-z0-9]+$/.test(qcodePart || ""))
 				errors.push("qcode: invalid format");
 
+			// OPEN RETURN relaxation: if RETURN ticket and return date is in the future, ignore missing/invalid depart errors
+			if (type === "RETURN" && returnDt) {
+				const now = new Date();
+				if (returnDt.getTime() >= now.getTime()) {
+					for (let i = errors.length - 1; i >= 0; i--) {
+						if (errors[i].startsWith("depart:")) errors.splice(i, 1);
+					}
+				}
+			}
+
+			const nAdults = adults ? Number(adults) : null;
+			const nChildren = children ? Number(children) : null;
 			const fields: any = {
 				flight,
 				rrdl,
 				type,
 				fare,
-				depart: depart ?? null,
-				return: ret ?? null,
-				adults: Number.isNaN(nAdults) ? null : nAdults,
-				children: Number.isNaN(nChildren) ? null : nChildren,
+				purchase: purchase ?? null,
+				depart: departTok ?? null,
+				return: retTok ?? null,
+				adults: nAdults !== null && !Number.isNaN(nAdults) ? nAdults : null,
+				children:
+					nChildren !== null && !Number.isNaN(nChildren) ? nChildren : null,
 				qcode: qcodePart ?? null,
 				hash: unique ?? null,
 			};
 
-			return { raw, kind: "QIT", fields, errors };
+			return { raw, kind: kindLabel, fields, errors };
 		}
 
 		// short ticket parse: look for the ::#: markers
@@ -214,7 +290,7 @@ export default function Home() {
 		const hashPart = parts.slice(2).join(marker); // in case extra markers
 
 		const fieldsArr = prefix.split(":");
-		// fieldsArr: [ticketNo, depart, return?, type, adults, children, fare, ...]
+		// fieldsArr: [ticketNo, depart, return?, type, adults, children, fare, coachCard?, ...]
 		const ticketNo = fieldsArr[0] ?? null;
 		const depart = fieldsArr[1] ?? null;
 		const ret = fieldsArr[2] ?? null;
@@ -222,6 +298,7 @@ export default function Home() {
 		const adults = fieldsArr[4] ?? null;
 		const children = fieldsArr[5] ?? null;
 		const fare = fieldsArr[6] ?? null;
+		const coachCard = fieldsArr[7] ?? null;
 
 		// bus refs: split by ':' and filter 4-letter codes
 		const refs = (refsPart || "")
@@ -295,6 +372,11 @@ export default function Home() {
 		if (!/^(CST|CFL|CFLL)$/.test(fare ?? ""))
 			errors.push("fare: must be CST, CFL, or CFLL");
 
+		// optional coach card number (alphanumeric 6-12)
+		if (coachCard && !/^[A-Za-z0-9]{6,12}$/.test(coachCard)) {
+			errors.push("coachCard: invalid format");
+		}
+
 		// validate refs
 		const badRefs = refs.filter((r) => !/^[A-Z]{4}$/.test(r));
 		if (badRefs.length > 0)
@@ -311,6 +393,7 @@ export default function Home() {
 			adults: /^[0-9]+$/.test(adults ?? "") ? Number(adults) : null,
 			children: /^[0-9]+$/.test(children ?? "") ? Number(children) : null,
 			fare,
+			coachCard: coachCard && coachCard !== "" ? coachCard : null,
 			refs,
 			hash,
 		};
@@ -856,8 +939,18 @@ export default function Home() {
 												</div>
 											</div>
 
-											{/* Date info */}
-											<div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+											{/* Date info (QIT supports purchase + depart + return) */}
+											<div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+												<div className="p-2 rounded bg-panel-quiet">
+													<div className="text-[10px] font-semibold text-gray-600">
+														Purchase
+													</div>
+													<div className="text-sm break-words">
+														{formatQITDate(parsed.purchase) ||
+															parsed.purchase ||
+															"-"}
+													</div>
+												</div>
 												<div className="p-2 rounded bg-panel-quiet">
 													<div className="text-[10px] font-semibold text-gray-600">
 														Depart
@@ -898,17 +991,32 @@ export default function Home() {
 												</div>
 											</div>
 
-											{/* References / codes */}
-											{parsed.refs && parsed.refs.length > 0 && (
-												<div className="p-2 rounded bg-panel-quiet">
-													<div className="text-[10px] font-semibold text-gray-600">
-														Refs
-													</div>
-													<div className="font-mono text-xs break-words">
-														{parsed.refs.join(" : ")}
-													</div>
+											{/* Coach Card + Refs in one row */}
+											{(parsed.refs && parsed.refs.length > 0) ||
+											parsed.coachCard ? (
+												<div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+													{parsed.coachCard && (
+														<div className="p-2 rounded bg-panel-quiet">
+															<div className="text-[10px] font-semibold text-gray-600">
+																Coach Card
+															</div>
+															<div className="font-mono text-xs break-all">
+																{parsed.coachCard}
+															</div>
+														</div>
+													)}
+													{parsed.refs && parsed.refs.length > 0 && (
+														<div className="p-2 rounded bg-panel-quiet">
+															<div className="text-[10px] font-semibold text-gray-600">
+																Refs
+															</div>
+															<div className="font-mono text-xs break-words">
+																{parsed.refs.join(" : ")}
+															</div>
+														</div>
+													)}
 												</div>
-											)}
+											) : null}
 
 											{/* Hash / signature */}
 											{parsed.hash && (
@@ -931,6 +1039,42 @@ export default function Home() {
 													</div>
 												</div>
 											)}
+											{/* Open return explanatory note */}
+											{parsedKind &&
+												(parsedKind === "QIT" || parsedKind === "QCK") &&
+												parsed.type === "RETURN" &&
+												parsed.return &&
+												(() => {
+													// if depart was missing/invalid originally we removed its errors; show rationale
+													const hadDepartError = validationErrors.find((e) =>
+														e.startsWith("depart:")
+													);
+													// compute if return still in future
+													const r = parsed.return;
+													if (r && /^[0-9]{10}$/.test(r)) {
+														const dd = Number(r.slice(0, 2));
+														const mm = Number(r.slice(2, 4));
+														const yy = Number(r.slice(4, 6));
+														const hh = Number(r.slice(6, 8));
+														const min = Number(r.slice(8, 10));
+														const d = new Date(2000 + yy, mm - 1, dd, hh, min);
+														if (!isNaN(d.getTime())) {
+															if (d.getTime() >= Date.now()) {
+																return (
+																	<div className="text-[11px] text-gray-600 italic">
+																		Open return: valid as long as return date
+																		hasn't expired
+																		{hadDepartError
+																			? " (depart missing/invalid ignored)"
+																			: ""}
+																		.
+																	</div>
+																);
+															}
+														}
+													}
+													return null;
+												})()}
 										</div>
 									) : null}
 									{validationErrors.length > 0 && (
