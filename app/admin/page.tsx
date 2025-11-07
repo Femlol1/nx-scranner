@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Toast from "../../components/Toast";
+import { toast } from "sonner";
 
 export default function AdminPage() {
 	const [scans, setScans] = useState<any[]>([]);
@@ -11,7 +11,7 @@ export default function AdminPage() {
 	const [lastRefreshed, setLastRefreshed] = useState<string | null>(null);
 	const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
 	const [search, setSearch] = useState<string>("");
-	const [toastMessage, setToastMessage] = useState<string>("");
+	// using sonner toast instead of local Toast component
 	const searchRef = useRef<HTMLInputElement | null>(null);
 
 	const load = async () => {
@@ -54,15 +54,15 @@ export default function AdminPage() {
 			const j = await r.json().catch(() => ({}));
 			if (j && (j.ok || j.deletedCount >= 0)) {
 				await load();
-				setToastMessage("Cleared today's scans");
+				toast.success("Cleared today's scans");
 			} else {
 				const eMsg = (j && j.error) || "clear failed";
 				setError(eMsg);
-				setToastMessage(`Clear failed: ${eMsg}`);
+				toast.error(`Clear failed: ${eMsg}`);
 			}
 		} catch (e: any) {
-			setError(e?.message || String(e));
-			setToastMessage(`Clear failed: ${e?.message || String(e)}`);
+				setError(e?.message || String(e));
+				toast.error(`Clear failed: ${e?.message || String(e)}`);
 		} finally {
 			setClearing(false);
 		}
@@ -107,14 +107,14 @@ export default function AdminPage() {
 							aria-label="Filter scans"
 						/>
 						<button
-							className="px-3 py-1 rounded border-default bg-panel"
-							onClick={load}
+							className="btn"
+							onClick={async () => { await load(); try { toast.info("Refreshed"); } catch {} }}
 							title="Refresh list"
 						>
 							{loading ? "Refreshing..." : "Refresh"}
 						</button>
 						<button
-							className="px-3 py-1 rounded bg-red-600 text-white"
+							className="btn btn-danger"
 							onClick={clearAll}
 							disabled={clearing}
 							title="Clear all scans for today"
@@ -126,8 +126,7 @@ export default function AdminPage() {
 
 				{error && <div className="text-sm text-red-600 mb-2">{error}</div>}
 
-				{/* Toast notifier */}
-				<Toast message={toastMessage} onClose={() => setToastMessage("")} />
+				{/* Notifications handled by Sonner <Toaster /> in layout */}
 
 				<div className="mb-3 text-xs text-gray-500">
 					{lastRefreshed
@@ -182,7 +181,7 @@ export default function AdminPage() {
 										</div>
 										<div className="flex items-center gap-2">
 											<button
-												className="px-2 py-1 text-xs rounded bg-muted"
+												className="btn btn-muted text-xs"
 												onClick={() =>
 													navigator.clipboard?.writeText(s.text || s.key || "")
 												}
@@ -190,7 +189,7 @@ export default function AdminPage() {
 												Copy
 											</button>
 											<button
-												className="px-2 py-1 text-xs rounded bg-muted"
+												className="btn btn-muted text-xs"
 												onClick={() =>
 													setExpandedIndex(expandedIndex === i ? null : i)
 												}

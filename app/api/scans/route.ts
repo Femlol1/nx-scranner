@@ -78,14 +78,22 @@ export async function POST(req: Request) {
 			);
 		}
 
-		// respond with duplicate metadata so clients can notify the user
+		// respond with duplicate metadata + recent uses so clients can show multi-use attempts
 		const wasDuplicate = !!updated && updated.count > 1;
+		let recentUses: any[] = [];
+		if (updated?.uses && Array.isArray(updated.uses)) {
+			recentUses = updated.uses
+				.slice(-10) // last 10 only
+				.map((u: any) => ({ at: u.at }));
+		}
 		return NextResponse.json({
 			ok: true,
 			wasDuplicate,
 			count: updated?.count ?? 1,
 			firstSeen: updated?.firstSeen,
 			lastSeen: updated?.lastSeen,
+			recentUses,
+			key,
 		});
 	} catch (err: any) {
 		console.error("/api/scans POST handler error:", err);

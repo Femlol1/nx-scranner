@@ -2,7 +2,7 @@
 
 import jsQR from "jsqr";
 import { useCallback, useEffect, useRef, useState } from "react";
-import Toast from "../components/Toast";
+import { toast } from "sonner";
 
 export default function Home() {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -31,7 +31,6 @@ export default function Home() {
 	const [parsed, setParsed] = useState<any | null>(null);
 	const [parsedKind, setParsedKind] = useState<string | null>(null);
 	const [validationErrors, setValidationErrors] = useState<string[]>([]);
-	const [toastMessage, setToastMessage] = useState<string>("");
 	const [lastUses, setLastUses] = useState<string[] | null>(null);
 	const [pulse, setPulse] = useState(false);
 	const pulseTimerRef = useRef<number | null>(null);
@@ -97,7 +96,10 @@ export default function Home() {
 				return { raw, kind: "QIT", fields: null, errors };
 			}
 			const qcodePart = after.slice(0, sepIdx).replace(/:^|:$/g, "").trim();
-			const unique = after.slice(sepIdx + sep.length).replace(/:$/g, "").trim();
+			const unique = after
+				.slice(sepIdx + sep.length)
+				.replace(/:$/g, "")
+				.trim();
 
 			const p = prefix.split(":");
 			const token = (i: number) => ((p[i] ?? "") as string).trim();
@@ -404,6 +406,9 @@ export default function Home() {
 				setScanning(true);
 				rafRef.current = null;
 				tick();
+				try {
+					toast.info("Camera started");
+				} catch {}
 			} catch (err: any) {
 				setError(err?.message || String(err));
 			}
@@ -428,6 +433,9 @@ export default function Home() {
 		// reset torch state
 		setTorchOn(false);
 		setScanning(false);
+		try {
+			toast.info("Camera stopped");
+		} catch {}
 	};
 
 	const tick = async () => {
@@ -530,43 +538,22 @@ export default function Home() {
 					});
 					const j = await resp.json().catch(() => ({}));
 					if (j && j.wasDuplicate) {
-						// show a toast notification about duplicate use
 						const prev = j.lastSeen
 							? new Date(j.lastSeen).toLocaleString()
 							: "unknown";
-						setToastMessage(
+						toast.warning(
 							`Duplicate scan — previously used at ${prev} (count: ${j.count})`
 						);
-						// fetch detailed uses from the list endpoint (small list expected)
-						try {
-							const listResp = await fetch(`/api/scans/list`);
-							const listJson = await listResp.json().catch(() => []);
-							if (Array.isArray(listJson)) {
-								// try to find by hash (if parsed hash) or by exact text
-								const key =
-									(parsedRes.fields &&
-										(parsedRes.fields.hash || parsedRes.fields.hash)) ||
-									null;
-								let found = null as any;
-								if (key)
-									found = listJson.find(
-										(r: any) =>
-											(r.parsed && r.parsed.hash === key) ||
-											r.key === key ||
-											r.text === text
-									);
-								if (!found) found = listJson.find((r: any) => r.text === text);
-								if (found && Array.isArray(found.uses)) {
-									setLastUses(
-										found.uses.map((u: any) => new Date(u.at).toLocaleString())
-									);
-								} else {
-									setLastUses(null);
-								}
-							}
-						} catch (e) {
-							// ignore list fetch errors
+						// use recentUses directly from response (already last 10)
+						if (Array.isArray(j.recentUses) && j.recentUses.length > 0) {
+							setLastUses(
+								j.recentUses.map((u: any) => new Date(u.at).toLocaleString())
+							);
+						} else {
+							setLastUses(null);
 						}
+					} else {
+						setLastUses(null);
 					}
 				} catch (e) {
 					// ignore network errors
@@ -609,7 +596,13 @@ export default function Home() {
 			await (track as any).applyConstraints({
 				advanced: [{ torch: !torchOn }],
 			});
-			setTorchOn((v) => !v);
+			setTorchOn((v) => {
+				const next = !v;
+				try {
+					toast.info(next ? "Torch on" : "Torch off");
+				} catch {}
+				return next;
+			});
 		} catch (e) {
 			// ignore
 		}
@@ -625,7 +618,14 @@ export default function Home() {
 			}
 			if (e.key === "c") copyResult();
 			if (e.key === "o") openIfUrl();
-			if (e.key === "s") setSingleScan((v) => !v);
+			if (e.key === "s")
+				setSingleScan((v) => {
+					const next = !v;
+					try {
+						toast.info(next ? "Single-scan mode" : "Continuous mode");
+					} catch {}
+					return next;
+				});
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
@@ -694,7 +694,12 @@ export default function Home() {
 						{devices.length > 0 && (
 							<select
 								value={selectedDeviceId ?? ""}
-								onChange={(e) => setSelectedDeviceId(e.target.value || null)}
+								onChange={(e) => {
+									setSelectedDeviceId(e.target.value || null);
+									try {
+										toast.info("Camera switched");
+									} catch {}
+								}}
 								className="px-2 py-1 border rounded"
 							>
 								{devices.map((d) => (
@@ -707,10 +712,16 @@ export default function Home() {
 
 						{/* Single-scan toggle */}
 						<button
-							className={`px-2 py-1 rounded border ${
-								singleScan ? "bg-yellow-100" : "bg-panel"
-							} border-default`}
-							onClick={() => setSingleScan((v) => !v)}
+							className={`btn ${singleScan ? "bg-yellow-100" : ""}`}
+							onClick={() =>
+								setSingleScan((v) => {
+									const next = !v;
+									try {
+										toast.info(next ? "Single-scan mode" : "Continuous mode");
+									} catch {}
+									return next;
+								})
+							}
 							title="Toggle single-scan mode (press 's')"
 						>
 							{singleScan ? "Single" : "Continuous"}
@@ -719,9 +730,7 @@ export default function Home() {
 						{/* Torch toggle if supported */}
 						{torchAvailable && (
 							<button
-								className={`px-2 py-1 rounded border ${
-									torchOn ? "bg-yellow-200" : "bg-panel"
-								} border-default`}
+								className={`btn ${torchOn ? "bg-yellow-200" : ""}`}
 								onClick={toggleTorch}
 								title="Toggle torch/flash"
 							>
@@ -732,22 +741,19 @@ export default function Home() {
 						{/* Start / Stop */}
 						{!scanning ? (
 							<button
-								className="px-4 py-2 bg-green-600 text-white rounded"
+								className="btn btn-primary"
 								onClick={() => startScanning(selectedDeviceId)}
 							>
 								Start
 							</button>
 						) : (
-							<button
-								className="px-4 py-2 bg-red-600 text-white rounded"
-								onClick={stopScanning}
-							>
+							<button className="btn btn-danger" onClick={stopScanning}>
 								Stop
 							</button>
 						)}
 
 						<button
-							className="px-4 py-2 bg-muted rounded"
+							className="btn btn-muted"
 							onClick={() => copyResult()}
 							disabled={!lastResult}
 						>
@@ -755,7 +761,7 @@ export default function Home() {
 						</button>
 
 						<button
-							className="px-4 py-2 bg-muted rounded"
+							className="btn btn-muted"
 							onClick={() => openIfUrl()}
 							disabled={!lastResult}
 						>
@@ -765,8 +771,7 @@ export default function Home() {
 
 					{error && <div className="text-sm text-red-600">{error}</div>}
 
-					{/* Toast component (auto-hiding) */}
-					<Toast message={toastMessage} onClose={() => setToastMessage("")} />
+					{/* Notifications handled by Sonner <Toaster /> in layout */}
 				</div>
 
 				<div className="flex flex-col gap-3">
@@ -956,10 +961,7 @@ export default function Home() {
 						<div className="flex items-center justify-between mb-2">
 							<h3 className="font-medium">History</h3>
 							<div className="flex gap-2">
-								<button
-									className="px-2 py-1 text-sm bg-muted rounded"
-									onClick={clearHistory}
-								>
+								<button className="btn btn-muted" onClick={clearHistory}>
 									Clear
 								</button>
 							</div>
@@ -990,13 +992,13 @@ export default function Home() {
 										</div>
 										<div className="flex gap-1">
 											<button
-												className="text-xs px-2 py-1 bg-muted rounded"
+												className="btn btn-muted text-xs"
 												onClick={() => copyResult(entry.text)}
 											>
 												Copy
 											</button>
 											<button
-												className="text-xs px-2 py-1 bg-muted rounded"
+												className="btn btn-muted text-xs"
 												onClick={() => openIfUrl(entry.text)}
 											>
 												Open
