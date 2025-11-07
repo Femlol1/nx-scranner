@@ -88,8 +88,14 @@ html[data-theme="dark"] {
 }
 
 @keyframes fadeIn {
-	0% { opacity: 0; transform: translateY(4px); }
-	100% { opacity: 1; transform: translateY(0); }
+	0% {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+	100% {
+		opacity: 1;
+		transform: translateY(0);
+	}
 }
 
 .animate-fadeIn {
@@ -169,11 +175,11 @@ html[data-theme="dark"] {
 }
 
 @layer base {
-  * {
-    @apply border-border outline-ring/50;
+	* {
+		@apply border-border outline-ring/50;
 	}
-  body {
-    @apply bg-background text-foreground;
+	body {
+		@apply bg-background text-foreground;
 	}
 }
 
@@ -192,8 +198,9 @@ html[data-theme="dark"] {
 	border-radius: var(--radius-sm);
 	line-height: 1.2;
 	cursor: pointer;
-	transition: background-color 120ms, color 120ms, border-color 120ms, box-shadow 120ms;
-	box-shadow: 0 0 0 0 rgba(0,0,0,0);
+	transition: background-color 120ms, color 120ms, border-color 120ms,
+		box-shadow 120ms;
+	box-shadow: 0 0 0 0 rgba(0, 0, 0, 0);
 }
 .btn:hover:not(:disabled) {
 	background: var(--muted-bg);
@@ -203,7 +210,7 @@ html[data-theme="dark"] {
 	outline-offset: 2px;
 }
 .btn:disabled {
-	opacity: .55;
+	opacity: 0.55;
 	cursor: not-allowed;
 }
 .btn-primary {

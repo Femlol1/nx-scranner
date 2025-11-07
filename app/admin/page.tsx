@@ -61,8 +61,8 @@ export default function AdminPage() {
 				toast.error(`Clear failed: ${eMsg}`);
 			}
 		} catch (e: any) {
-				setError(e?.message || String(e));
-				toast.error(`Clear failed: ${e?.message || String(e)}`);
+			setError(e?.message || String(e));
+			toast.error(`Clear failed: ${e?.message || String(e)}`);
 		} finally {
 			setClearing(false);
 		}
@@ -108,7 +108,12 @@ export default function AdminPage() {
 						/>
 						<button
 							className="btn"
-							onClick={async () => { await load(); try { toast.info("Refreshed"); } catch {} }}
+							onClick={async () => {
+								await load();
+								try {
+									toast.info("Refreshed");
+								} catch {}
+							}}
 							title="Refresh list"
 						>
 							{loading ? "Refreshing..." : "Refresh"}
