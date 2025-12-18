@@ -12,6 +12,7 @@ export default function Home() {
 	const detectorRef = useRef<any>(null);
 	const imageCaptureRef = useRef<any>(null);
 	const [scanning, setScanning] = useState(false);
+	const [isCameraLoading, setIsCameraLoading] = useState(false);
 	const [lastResult, setLastResult] = useState<string | null>(null);
 	const [showModal, setShowModal] = useState(false);
 	type HistoryEntry = {
@@ -444,6 +445,11 @@ export default function Home() {
 		})();
 
 		return () => {
+			// Clean up animation frame and camera on unmount
+			if (rafRef.current) {
+				cancelAnimationFrame(rafRef.current);
+				rafRef.current = null;
+			}
 			stopScanning();
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
@@ -451,6 +457,9 @@ export default function Home() {
 
 	const startScanning = useCallback(
 		async (deviceId?: string | null) => {
+			if (isCameraLoading) return; // Prevent race condition
+
+			setIsCameraLoading(true);
 			setError(null);
 			try {
 				// stop existing stream first
@@ -497,10 +506,11 @@ export default function Home() {
 				} catch {}
 			} catch (err: any) {
 				setError(err?.message || String(err));
+			} finally {
+				setIsCameraLoading(false);
 			}
 		},
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-		[]
+		[isCameraLoading]
 	);
 
 	const stopScanning = () => {
@@ -564,7 +574,10 @@ export default function Home() {
 			// ignore per-frame errors
 		}
 
-		rafRef.current = requestAnimationFrame(tick);
+		// Only continue animation if still scanning
+		if (scanning) {
+			rafRef.current = requestAnimationFrame(tick);
+		}
 	};
 
 	const handleResult = (text: string) => {
@@ -842,11 +855,16 @@ export default function Home() {
 							<button
 								className="btn btn-primary"
 								onClick={() => startScanning(selectedDeviceId)}
+								disabled={isCameraLoading}
 							>
-								Start
+								{isCameraLoading ? "Starting..." : "Start"}
 							</button>
 						) : (
-							<button className="btn btn-danger" onClick={stopScanning}>
+							<button
+								className="btn btn-danger"
+								onClick={stopScanning}
+								disabled={isCameraLoading}
+							>
 								Stop
 							</button>
 						)}
