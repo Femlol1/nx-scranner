@@ -492,12 +492,12 @@ export default function Home() {
 								deviceId: { exact: deviceId },
 								width: { ideal: 1280 },
 								height: { ideal: 720 },
-								facingMode: "environment"
+								facingMode: "environment",
 						  }
 						: {
 								facingMode: "environment",
 								width: { ideal: 1280 },
-								height: { ideal: 720 }
+								height: { ideal: 720 },
 						  },
 				};
 
@@ -613,14 +613,17 @@ export default function Home() {
 		if (!text) return;
 		// Prevent processing multiple scans simultaneously
 		if (isProcessingRef.current) return;
-		
+
 		// Debounce: prevent scanning the same code too quickly
 		const now = Date.now();
-		if (text === lastResult && now - lastScanTimeRef.current < SCAN_DEBOUNCE_MS) {
+		if (
+			text === lastResult &&
+			now - lastScanTimeRef.current < SCAN_DEBOUNCE_MS
+		) {
 			return;
 		}
 		lastScanTimeRef.current = now;
-		
+
 		isProcessingRef.current = true;
 		setLastResult(text);
 
@@ -667,7 +670,7 @@ export default function Home() {
 				const maxRetries = 3;
 				let attempt = 0;
 				let success = false;
-				
+
 				while (attempt < maxRetries && !success) {
 					try {
 						const resp = await fetch("/api/scans", {
@@ -681,33 +684,33 @@ export default function Home() {
 								count: 1,
 							}),
 						});
-						
+
 						if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-						
+
 						const j = await resp.json().catch(() => ({}));
 						if (j && j.wasDuplicate) {
-						const prev = j.lastSeen
-							? new Date(j.lastSeen).toLocaleString()
-							: "unknown";
-						toast.warning(
-							`Duplicate scan — previously used at ${prev} (count: ${j.count})`
-						);
-						// Set scan count
-						setScanCount(j.count || 1);
-						// use recentUses directly from response (already last 10)
-						if (Array.isArray(j.recentUses) && j.recentUses.length > 0) {
-							setLastUses(
-								j.recentUses.map((u: any) => new Date(u.at).toLocaleString())
+							const prev = j.lastSeen
+								? new Date(j.lastSeen).toLocaleString()
+								: "unknown";
+							toast.warning(
+								`Duplicate scan — previously used at ${prev} (count: ${j.count})`
 							);
+							// Set scan count
+							setScanCount(j.count || 1);
+							// use recentUses directly from response (already last 10)
+							if (Array.isArray(j.recentUses) && j.recentUses.length > 0) {
+								setLastUses(
+									j.recentUses.map((u: any) => new Date(u.at).toLocaleString())
+								);
+							} else {
+								setLastUses(null);
+							}
 						} else {
+							// First scan
+							setScanCount(1);
 							setLastUses(null);
 						}
-					} else {
-						// First scan
-						setScanCount(1);
-						setLastUses(null);
-					}
-					success = true;
+						success = true;
 					} catch (e: any) {
 						attempt++;
 						if (attempt >= maxRetries) {
@@ -719,18 +722,20 @@ export default function Home() {
 							} catch {}
 						} else {
 							// Wait before retry with exponential backoff
-							await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 500));
+							await new Promise((resolve) =>
+								setTimeout(resolve, Math.pow(2, attempt) * 500)
+							);
 						}
 					}
-			}
-			
-			// Show modal after all retry attempts complete
-			setShowModal(true);
-			// Reset processing flag after a delay to allow modal to show
-			setTimeout(() => {
-				isProcessingRef.current = false;
-			}, 500);
-		})();
+				}
+
+				// Show modal after all retry attempts complete
+				setShowModal(true);
+				// Reset processing flag after a delay to allow modal to show
+				setTimeout(() => {
+					isProcessingRef.current = false;
+				}, 500);
+			})();
 		} catch (e) {
 			// ignore parsing/post errors but reset processing flag
 			isProcessingRef.current = false;
@@ -750,30 +755,36 @@ export default function Home() {
 	 * Copies QR code text to clipboard.
 	 * @param t - Optional text to copy; defaults to lastResult
 	 */
-	const copyResult = useCallback(async (t?: string) => {
-		try {
-			await navigator.clipboard.writeText(t || lastResult || "");
-			toast.success("Copied to clipboard");
-		} catch (_) {
-			// fallback
-			toast.error("Failed to copy");
-		}
-	}, [lastResult]);
+	const copyResult = useCallback(
+		async (t?: string) => {
+			try {
+				await navigator.clipboard.writeText(t || lastResult || "");
+				toast.success("Copied to clipboard");
+			} catch (_) {
+				// fallback
+				toast.error("Failed to copy");
+			}
+		},
+		[lastResult]
+	);
 
 	/**
 	 * Opens QR code text as URL if valid.
 	 * @param t - Optional text to open; defaults to lastResult
 	 */
-	const openIfUrl = useCallback((t?: string) => {
-		const txt = (t || lastResult || "").trim();
-		try {
-			const u = new URL(txt);
-			window.open(u.toString(), "_blank");
-		} catch (_) {
-			// not a url
-			toast.error("Not a valid URL");
-		}
-	}, [lastResult]);
+	const openIfUrl = useCallback(
+		(t?: string) => {
+			const txt = (t || lastResult || "").trim();
+			try {
+				const u = new URL(txt);
+				window.open(u.toString(), "_blank");
+			} catch (_) {
+				// not a url
+				toast.error("Not a valid URL");
+			}
+		},
+		[lastResult]
+	);
 
 	/**
 	 * Toggles camera torch/flashlight if supported by the device.
@@ -886,15 +897,18 @@ export default function Home() {
 							<div className="absolute inset-0 flex items-center justify-center bg-black/50">
 								<div className="flex flex-col items-center gap-2">
 									<div className="animate-spin h-8 w-8 border-4 border-white border-t-transparent rounded-full"></div>
-									<span className="text-white text-sm font-medium">Starting camera...</span>
+									<span className="text-white text-sm font-medium">
+										Starting camera...
+									</span>
 								</div>
 							</div>
 						)}
 
 						{/* visual overlay to help user aim */}
-						<div className="pointer-events-none absolute inset-0 flex items-center justify-center">{!isCameraLoading && (
-							<div className="w-2/3 h-2/3 border-2 rounded-md shadow-sm bg-panel-quiet border-default"></div>
-						)}
+						<div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+							{!isCameraLoading && (
+								<div className="w-2/3 h-2/3 border-2 rounded-md shadow-sm bg-panel-quiet border-default"></div>
+							)}
 						</div>
 					</div>
 
@@ -921,7 +935,9 @@ export default function Home() {
 
 						{/* Single-scan toggle */}
 						<button
-							className={`btn touch-manipulation ${singleScan ? "bg-yellow-100" : ""}`}
+							className={`btn touch-manipulation ${
+								singleScan ? "bg-yellow-100" : ""
+							}`}
 							onClick={() =>
 								setSingleScan((v) => {
 									const next = !v;
@@ -939,7 +955,9 @@ export default function Home() {
 						{/* Torch toggle if supported */}
 						{torchAvailable && (
 							<button
-								className={`btn touch-manipulation ${torchOn ? "bg-yellow-200" : ""}`}
+								className={`btn touch-manipulation ${
+									torchOn ? "bg-yellow-200" : ""
+								}`}
 								onClick={toggleTorch}
 								title="Toggle torch/flash"
 							>
