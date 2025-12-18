@@ -3,6 +3,7 @@
 import jsQR from "jsqr";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import ScanResultModal from "@/components/ScanResultModal";
 
 export default function Home() {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -12,6 +13,7 @@ export default function Home() {
 	const imageCaptureRef = useRef<any>(null);
 	const [scanning, setScanning] = useState(false);
 	const [lastResult, setLastResult] = useState<string | null>(null);
+	const [showModal, setShowModal] = useState(false);
 	type HistoryEntry = {
 		text: string;
 		count: number;
@@ -595,15 +597,21 @@ export default function Home() {
 			return [entry, ...prev].slice(0, 200);
 		});
 
-		if (singleScan) {
-			stopScanning();
-		}
 		// parse and post to server to save
 		try {
 			const parsedRes = parseQrText(text);
 			setParsed(parsedRes.fields ?? null);
 			setParsedKind(parsedRes.kind ?? null);
 			setValidationErrors(parsedRes.errors ?? []);
+
+			// Check if ticket is valid (no validation errors)
+			const isValidTicket = parsedRes.errors.length === 0;
+
+			// Stop scanning immediately for valid tickets
+			if (isValidTicket) {
+				stopScanning();
+				setShowModal(true);
+			}
 
 			// post and check server response for duplicate metadata
 			(async () => {
@@ -644,6 +652,10 @@ export default function Home() {
 			})();
 		} catch (e) {
 			// ignore parsing/post errors
+		}
+
+		if (singleScan && !showModal) {
+			stopScanning();
 		}
 	};
 
@@ -1159,6 +1171,18 @@ export default function Home() {
 			<div className="text-xs text-gray-500 mt-4">
 				Uses the browser BarcodeDetector API with a jsQR fallback.
 			</div>
+
+			{/* Scan Result Modal */}
+			<ScanResultModal
+				isOpen={showModal}
+				onClose={() => setShowModal(false)}
+				lastResult={lastResult}
+				parsed={parsed}
+				parsedKind={parsedKind}
+				validationErrors={validationErrors}
+				lastUses={lastUses}
+				formatQITDate={formatQITDate}
+			/>
 		</div>
 	);
 }
