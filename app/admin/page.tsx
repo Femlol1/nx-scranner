@@ -13,8 +13,10 @@ export default function AdminPage() {
 	const [search, setSearch] = useState<string>("");
 	const [currentPage, setCurrentPage] = useState<number>(1);
 	const [pageSize, setPageSize] = useState<number>(50);
+	const [debouncedSearch, setDebouncedSearch] = useState<string>("");
 	// using sonner toast instead of local Toast component
 	const searchRef = useRef<HTMLInputElement | null>(null);
+	const searchDebounceRef = useRef<NodeJS.Timeout | null>(null);
 
 	const load = async (page: number = 1, limit: number = 50) => {
 		setLoading(true);
@@ -53,6 +55,21 @@ export default function AdminPage() {
 		load(currentPage, pageSize);
 	}, [currentPage, pageSize]);
 
+	// Debounce search input
+	useEffect(() => {
+		if (searchDebounceRef.current) {
+			clearTimeout(searchDebounceRef.current);
+		}
+		searchDebounceRef.current = setTimeout(() => {
+			setDebouncedSearch(search);
+		}, 300);
+		return () => {
+			if (searchDebounceRef.current) {
+				clearTimeout(searchDebounceRef.current);
+			}
+		};
+	}, [search]);
+
 	const clearAll = async () => {
 		if (!confirm("Delete all scans for today? This cannot be undone.")) return;
 		setClearing(true);
@@ -76,15 +93,52 @@ export default function AdminPage() {
 		}
 	};
 
+	/**
+	 * Exports scan data as CSV file for download.
+	 */
+	const exportScans = () => {
+		if (scans.length === 0) {
+			toast.error("No scans to export");
+			return;
+		}
+		try {
+			// Create CSV content
+			const headers = ["Key", "Text", "Count", "First Seen", "Last Seen"];
+			const rows = scans.map((s) => [
+				s.key || "",
+				(s.text || "").replace(/"/g, '""'), // Escape quotes
+				s.count || 0,
+				s.firstSeen ? new Date(s.firstSeen).toLocaleString() : "",
+				s.lastSeen ? new Date(s.lastSeen).toLocaleString() : "",
+			]);
+			const csv = [
+				headers.join(","),
+				...rows.map((row) => row.map((cell) => `"${cell}"`).join(",")),
+			].join("\n");
+
+			// Download file
+			const blob = new Blob([csv], { type: "text/csv" });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement("a");
+			a.href = url;
+			a.download = `scans-${new Date().toISOString().split("T")[0]}.csv`;
+			a.click();
+			URL.revokeObjectURL(url);
+			toast.success("Export successful");
+		} catch (e: any) {
+			toast.error(`Export failed: ${e?.message || String(e)}`);
+		}
+	};
+
 	const filteredScans = useMemo(() => {
-		const q = (search || "").trim().toLowerCase();
+		const q = (debouncedSearch || "").trim().toLowerCase();
 		if (!q) return scans;
 		return scans.filter((s) => {
 			const text = (s.text || "" + s.key || "").toString().toLowerCase();
 			const key = (s.key || "").toString().toLowerCase();
 			return text.includes(q) || key.includes(q);
 		});
-	}, [scans, search]);
+	}, [scans, debouncedSearch]);
 
 	return (
 		<div

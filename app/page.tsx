@@ -38,8 +38,17 @@ export default function Home() {
 	const [scanCount, setScanCount] = useState<number>(1);
 	const [pulse, setPulse] = useState(false);
 	const pulseTimerRef = useRef<number | null>(null);
+	const isProcessingRef = useRef(false);
+	const lastScanTimeRef = useRef<number>(0);
+	const SCAN_DEBOUNCE_MS = 1000; // Prevent scanning same code within 1 second
+	const [showHelp, setShowHelp] = useState(false);
 
-	// helper to format QIT DDMMYYHHMM into a readable date
+	/**
+	 * Formats a QIT date string (DDMMYYHHMM or DDMMYY) into a readable localized string.
+	 * Uses UTC for consistent timezone handling across different locales.
+	 * @param s - Date string in DDMMYYHHMM (10 digits) or DDMMYY (6 digits) format
+	 * @returns Formatted localized date string or "-" if invalid
+	 */
 	const formatQITDate = (s?: string | null) => {
 		try {
 			if (!s) return "-";
@@ -50,7 +59,7 @@ export default function Home() {
 				const yy = Number(s.slice(4, 6));
 				const hh = Number(s.slice(6, 8));
 				const min = Number(s.slice(8, 10));
-				const d = new Date(2000 + yy, mm - 1, dd, hh, min);
+				const d = new Date(Date.UTC(2000 + yy, mm - 1, dd, hh, min));
 				if (isNaN(d.getTime())) return s;
 				return d.toLocaleString();
 			}
@@ -58,7 +67,7 @@ export default function Home() {
 				const dd = Number(s.slice(0, 2));
 				const mm = Number(s.slice(2, 4));
 				const yy = Number(s.slice(4, 6));
-				const d = new Date(2000 + yy, mm - 1, dd, 0, 0);
+				const d = new Date(Date.UTC(2000 + yy, mm - 1, dd, 0, 0));
 				if (isNaN(d.getTime())) return s;
 				return d.toLocaleDateString();
 			}
@@ -82,7 +91,14 @@ export default function Home() {
 		}
 	};
 
-	// parse a QR payload of the colon-separated format into fields and validate
+	/**
+	 * Parses and validates QR code text in multiple supported formats:
+	 * - QIT/QCK extended format (with metadata)
+	 * - Short format (::# separator)
+	 * - Generic format (fallback)
+	 * @param text - Raw QR code text to parse
+	 * @returns Object containing parsed fields, format kind, and validation errors
+	 */
 	const parseQrText = (text: string) => {
 		const errors: string[] = [];
 		const raw = (text || "").trim();
@@ -202,7 +218,8 @@ export default function Home() {
 				if (hh < 0 || hh > 23) return null;
 				if (min < 0 || min > 59) return null;
 				const year = 2000 + yy;
-				const d = new Date(year, mm - 1, dd, hh, min);
+				// Use UTC for consistent timezone handling
+				const d = new Date(Date.UTC(year, mm - 1, dd, hh, min));
 				if (isNaN(d.getTime())) return null;
 				return d;
 			};
@@ -240,7 +257,7 @@ export default function Home() {
 			if (children && !/^[0-9]+$/.test(children))
 				errors.push("children: must be integer >= 0");
 
-			if (!/^[0-9a-fA-F]{16,32}$/.test(unique || ""))
+			if (!/^[0-9a-fA-F]{8,32}$/.test(unique || ""))
 				errors.push("hash: invalid hex id");
 			if (!/^Q[A-Za-z0-9]+$/.test(qcodePart || ""))
 				errors.push("qcode: invalid format");
@@ -471,8 +488,17 @@ export default function Home() {
 				const constraints: MediaStreamConstraints = {
 					audio: false,
 					video: deviceId
-						? { deviceId: { exact: deviceId } }
-						: { facingMode: "environment" },
+						? {
+								deviceId: { exact: deviceId },
+								width: { ideal: 1280 },
+								height: { ideal: 720 },
+								facingMode: "environment"
+						  }
+						: {
+								facingMode: "environment",
+								width: { ideal: 1280 },
+								height: { ideal: 720 }
+						  },
 				};
 
 				const stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -526,8 +552,11 @@ export default function Home() {
 			videoRef.current.pause();
 			videoRef.current.srcObject = null;
 		}
-		// reset torch state
+		// reset torch state and scanning state
 		setTorchOn(false);
+		setScanning(false);
+		// Reset processing flag on stop
+		isProcessingRef.current = false;
 		setScanning(false);
 		try {
 			toast.info("Camera stopped");
@@ -582,9 +611,20 @@ export default function Home() {
 
 	const handleResult = (text: string) => {
 		if (!text) return;
+		// Prevent processing multiple scans simultaneously
+		if (isProcessingRef.current) return;
+		
+		// Debounce: prevent scanning the same code too quickly
+		const now = Date.now();
+		if (text === lastResult && now - lastScanTimeRef.current < SCAN_DEBOUNCE_MS) {
+			return;
+		}
+		lastScanTimeRef.current = now;
+		
+		isProcessingRef.current = true;
 		setLastResult(text);
 
-		const now = new Date().toISOString();
+		const nowISO = new Date().toISOString();
 
 		setHistory((prev) => {
 			// check for existing entry (exact match)
@@ -595,7 +635,7 @@ export default function Home() {
 				const bumped: HistoryEntry = {
 					...existing,
 					count: existing.count + 1,
-					lastSeen: now,
+					lastSeen: nowISO,
 				};
 				// move to front
 				updated.splice(idx, 1);
@@ -605,8 +645,8 @@ export default function Home() {
 			const entry: HistoryEntry = {
 				text,
 				count: 1,
-				firstSeen: now,
-				lastSeen: now,
+				firstSeen: nowISO,
+				lastSeen: nowISO,
 			};
 			return [entry, ...prev].slice(0, 200);
 		});
@@ -623,20 +663,29 @@ export default function Home() {
 
 			// post and check server response for duplicate metadata BEFORE showing modal
 			(async () => {
-				try {
-					const resp = await fetch("/api/scans", {
-						method: "POST",
-						headers: { "Content-Type": "application/json" },
-						body: JSON.stringify({
-							text,
-							parsed: parsedRes.fields,
-							firstSeen: new Date().toISOString(),
-							lastSeen: new Date().toISOString(),
-							count: 1,
-						}),
-					});
-					const j = await resp.json().catch(() => ({}));
-					if (j && j.wasDuplicate) {
+				// Retry logic with exponential backoff
+				const maxRetries = 3;
+				let attempt = 0;
+				let success = false;
+				
+				while (attempt < maxRetries && !success) {
+					try {
+						const resp = await fetch("/api/scans", {
+							method: "POST",
+							headers: { "Content-Type": "application/json" },
+							body: JSON.stringify({
+								text,
+								parsed: parsedRes.fields,
+								firstSeen: new Date().toISOString(),
+								lastSeen: new Date().toISOString(),
+								count: 1,
+							}),
+						});
+						
+						if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+						
+						const j = await resp.json().catch(() => ({}));
+						if (j && j.wasDuplicate) {
 						const prev = j.lastSeen
 							? new Date(j.lastSeen).toLocaleString()
 							: "unknown";
@@ -658,17 +707,33 @@ export default function Home() {
 						setScanCount(1);
 						setLastUses(null);
 					}
-				} catch (e) {
-					// ignore network errors but still set defaults
-					setScanCount(1);
-					setLastUses(null);
-				} finally {
-					// Show modal after API call completes (or fails)
-					setShowModal(true);
-				}
-			})();
+					success = true;
+					} catch (e: any) {
+						attempt++;
+						if (attempt >= maxRetries) {
+							// Final failure - set defaults and show error
+							setScanCount(1);
+							setLastUses(null);
+							try {
+								toast.error(`Failed to save scan after ${maxRetries} attempts`);
+							} catch {}
+						} else {
+							// Wait before retry with exponential backoff
+							await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 500));
+						}
+					}
+			}
+			
+			// Show modal after all retry attempts complete
+			setShowModal(true);
+			// Reset processing flag after a delay to allow modal to show
+			setTimeout(() => {
+				isProcessingRef.current = false;
+			}, 500);
+		})();
 		} catch (e) {
-			// ignore parsing/post errors
+			// ignore parsing/post errors but reset processing flag
+			isProcessingRef.current = false;
 		}
 
 		if (singleScan && !showModal) {
@@ -676,27 +741,43 @@ export default function Home() {
 		}
 	};
 
-	const clearHistory = () => setHistory([]);
+	/**
+	 * Clears the local scan history.
+	 */
+	const clearHistory = useCallback(() => setHistory([]), []);
 
-	const copyResult = async (t?: string) => {
+	/**
+	 * Copies QR code text to clipboard.
+	 * @param t - Optional text to copy; defaults to lastResult
+	 */
+	const copyResult = useCallback(async (t?: string) => {
 		try {
 			await navigator.clipboard.writeText(t || lastResult || "");
+			toast.success("Copied to clipboard");
 		} catch (_) {
 			// fallback
+			toast.error("Failed to copy");
 		}
-	};
+	}, [lastResult]);
 
-	const openIfUrl = (t?: string) => {
+	/**
+	 * Opens QR code text as URL if valid.
+	 * @param t - Optional text to open; defaults to lastResult
+	 */
+	const openIfUrl = useCallback((t?: string) => {
 		const txt = (t || lastResult || "").trim();
 		try {
 			const u = new URL(txt);
 			window.open(u.toString(), "_blank");
 		} catch (_) {
 			// not a url
+			toast.error("Not a valid URL");
 		}
-	};
+	}, [lastResult]);
 
-	// toggle torch/flash if available
+	/**
+	 * Toggles camera torch/flashlight if supported by the device.
+	 */
 	const toggleTorch = async () => {
 		try {
 			const obj = imageCaptureRef.current;
@@ -738,6 +819,10 @@ export default function Home() {
 					} catch {}
 					return next;
 				});
+			if (e.key === "?") {
+				e.preventDefault();
+				setShowHelp((v) => !v);
+			}
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
@@ -773,12 +858,13 @@ export default function Home() {
 				background: "linear-gradient(var(--background), var(--panel-bg))",
 			}}
 		>
-			<div className="w-full flex items-center justify-between">
-				<h1 className="text-2xl font-semibold">QR Scanner</h1>
+			<div className="w-full flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+				<h1 className="text-xl sm:text-2xl font-semibold">QR Scanner</h1>
 				<button
-					className="px-3 py-1 rounded border bg-white/80 hover:bg-gray-100"
+					className="px-3 py-1 rounded border bg-white/80 hover:bg-gray-100 text-sm"
 					onClick={toggleTheme}
 					title="Toggle light/dark theme"
+					aria-label="Toggle theme"
 				>
 					{theme === "dark" ? "🌙 Dark" : "☀️ Light"}
 				</button>
@@ -789,15 +875,26 @@ export default function Home() {
 					<div className="bg-muted rounded overflow-hidden aspect-video flex items-center justify-center relative shadow-sm border-default">
 						<video
 							ref={videoRef}
-							className="w-full h-full object-cover"
+							className="w-full h-full object-contain"
 							muted
 							playsInline
 						/>
 						<canvas ref={canvasRef} style={{ display: "none" }} />
 
+						{/* Loading indicator overlay */}
+						{isCameraLoading && (
+							<div className="absolute inset-0 flex items-center justify-center bg-black/50">
+								<div className="flex flex-col items-center gap-2">
+									<div className="animate-spin h-8 w-8 border-4 border-white border-t-transparent rounded-full"></div>
+									<span className="text-white text-sm font-medium">Starting camera...</span>
+								</div>
+							</div>
+						)}
+
 						{/* visual overlay to help user aim */}
-						<div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+						<div className="pointer-events-none absolute inset-0 flex items-center justify-center">{!isCameraLoading && (
 							<div className="w-2/3 h-2/3 border-2 rounded-md shadow-sm bg-panel-quiet border-default"></div>
+						)}
 						</div>
 					</div>
 
@@ -824,7 +921,7 @@ export default function Home() {
 
 						{/* Single-scan toggle */}
 						<button
-							className={`btn ${singleScan ? "bg-yellow-100" : ""}`}
+							className={`btn touch-manipulation ${singleScan ? "bg-yellow-100" : ""}`}
 							onClick={() =>
 								setSingleScan((v) => {
 									const next = !v;
@@ -842,7 +939,7 @@ export default function Home() {
 						{/* Torch toggle if supported */}
 						{torchAvailable && (
 							<button
-								className={`btn ${torchOn ? "bg-yellow-200" : ""}`}
+								className={`btn touch-manipulation ${torchOn ? "bg-yellow-200" : ""}`}
 								onClick={toggleTorch}
 								title="Toggle torch/flash"
 							>
@@ -853,7 +950,7 @@ export default function Home() {
 						{/* Start / Stop */}
 						{!scanning ? (
 							<button
-								className="btn btn-primary"
+								className="btn btn-primary touch-manipulation"
 								onClick={() => startScanning(selectedDeviceId)}
 								disabled={isCameraLoading}
 								aria-label="Start camera scanner"
@@ -863,7 +960,7 @@ export default function Home() {
 							</button>
 						) : (
 							<button
-								className="btn btn-danger"
+								className="btn btn-danger touch-manipulation"
 								onClick={stopScanning}
 								disabled={isCameraLoading}
 								aria-label="Stop camera scanner"
@@ -873,7 +970,7 @@ export default function Home() {
 						)}
 
 						<button
-							className="btn btn-muted"
+							className="btn btn-muted touch-manipulation"
 							onClick={() => openIfUrl()}
 							disabled={!lastResult}
 						>
@@ -1166,12 +1263,16 @@ export default function Home() {
 											<button
 												className="btn btn-muted text-xs"
 												onClick={() => copyResult(entry.text)}
+												title="Copy this QR code text to clipboard (Shortcut: C key for last scan)"
+												aria-label="Copy to clipboard"
 											>
 												Copy
 											</button>
 											<button
 												className="btn btn-muted text-xs"
 												onClick={() => openIfUrl(entry.text)}
+												title="Open as URL in new tab"
+												aria-label="Open as URL"
 											>
 												Open
 											</button>
@@ -1184,9 +1285,68 @@ export default function Home() {
 				</div>
 			</div>
 
-			<div className="text-xs text-gray-500 mt-4">
-				Uses the browser BarcodeDetector API with a jsQR fallback.
+			<div className="text-xs text-gray-500 mt-4 flex items-center justify-between">
+				<span>Uses the browser BarcodeDetector API with a jsQR fallback.</span>
+				<button
+					onClick={() => setShowHelp(true)}
+					className="text-blue-600 hover:underline"
+					title="View keyboard shortcuts"
+				>
+					Keyboard shortcuts (?)
+				</button>
 			</div>
+
+			{/* Keyboard Shortcuts Help Modal */}
+			{showHelp && (
+				<div
+					className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
+					onClick={() => setShowHelp(false)}
+				>
+					<div
+						className="bg-panel rounded-lg shadow-xl max-w-md w-full p-6"
+						onClick={(e) => e.stopPropagation()}
+					>
+						<div className="flex items-center justify-between mb-4">
+							<h2 className="text-xl font-semibold">Keyboard Shortcuts</h2>
+							<button
+								onClick={() => setShowHelp(false)}
+								className="text-gray-500 hover:text-gray-700 text-2xl leading-none"
+								aria-label="Close help"
+							>
+								×
+							</button>
+						</div>
+						<div className="space-y-3 text-sm">
+							<div className="flex justify-between items-center py-2 border-b border-default">
+								<span className="font-medium">Space</span>
+								<span className="text-gray-600">Start/Stop scanning</span>
+							</div>
+							<div className="flex justify-between items-center py-2 border-b border-default">
+								<span className="font-medium">C</span>
+								<span className="text-gray-600">Copy last result</span>
+							</div>
+							<div className="flex justify-between items-center py-2 border-b border-default">
+								<span className="font-medium">O</span>
+								<span className="text-gray-600">Open as URL</span>
+							</div>
+							<div className="flex justify-between items-center py-2 border-b border-default">
+								<span className="font-medium">S</span>
+								<span className="text-gray-600">Toggle single-scan mode</span>
+							</div>
+							<div className="flex justify-between items-center py-2">
+								<span className="font-medium">?</span>
+								<span className="text-gray-600">Show this help</span>
+							</div>
+						</div>
+						<button
+							onClick={() => setShowHelp(false)}
+							className="mt-6 w-full btn btn-primary"
+						>
+							Got it!
+						</button>
+					</div>
+				</div>
+			)}
 
 			{/* Scan Result Modal */}
 			<ScanResultModal

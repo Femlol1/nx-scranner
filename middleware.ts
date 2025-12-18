@@ -2,8 +2,9 @@ import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
 export function middleware(request: NextRequest) {
-	// Only protect /admin routes
-	if (request.nextUrl.pathname.startsWith("/admin")) {
+	// Only protect /admin routes (case-insensitive and handle trailing slashes)
+	const pathname = request.nextUrl.pathname.toLowerCase().replace(/\/+$/, "");
+	if (pathname.startsWith("/admin")) {
 		// Check for authorization
 		const authHeader = request.headers.get("authorization");
 		const basicAuth = authHeader?.split(" ")[1];

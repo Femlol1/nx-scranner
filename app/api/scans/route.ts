@@ -12,6 +12,20 @@ export async function POST(req: Request) {
 		const body = await req.json();
 		const { text, parsed, firstSeen, lastSeen, count } = body || {};
 
+		// Input validation
+		if (text && typeof text !== "string") {
+			return NextResponse.json(
+				{ ok: false, error: "Invalid text field" },
+				{ status: 400 }
+			);
+		}
+		if (text && text.length > 10000) {
+			return NextResponse.json(
+				{ ok: false, error: "Text too long" },
+				{ status: 400 }
+			);
+		}
+
 		let client;
 		try {
 			client = await getClient();
