@@ -319,7 +319,8 @@ export default function ScanResultModal({
 								⚠️ Duplicate Scan Detected
 							</h3>
 							<p className="text-sm text-yellow-700 dark:text-yellow-300 mb-2 font-semibold">
-								This ticket has been scanned {scanCount} time{scanCount !== 1 ? 's' : ''} total.
+								This ticket has been scanned {scanCount} time
+								{scanCount !== 1 ? "s" : ""} total.
 							</p>
 							<p className="text-xs text-yellow-600 dark:text-yellow-400 mb-2">
 								Previous scan times:
