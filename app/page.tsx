@@ -1,9 +1,9 @@
 "use client";
 
+import ScanResultModal from "@/components/ScanResultModal";
 import jsQR from "jsqr";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import ScanResultModal from "@/components/ScanResultModal";
 
 export default function Home() {
 	const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -604,14 +604,9 @@ export default function Home() {
 			setParsedKind(parsedRes.kind ?? null);
 			setValidationErrors(parsedRes.errors ?? []);
 
-			// Check if ticket is valid (no validation errors)
-			const isValidTicket = parsedRes.errors.length === 0;
-
-			// Stop scanning immediately for valid tickets
-			if (isValidTicket) {
-				stopScanning();
-				setShowModal(true);
-			}
+			// Stop scanning and show modal for all scans (valid and invalid)
+			stopScanning();
+			setShowModal(true);
 
 			// post and check server response for duplicate metadata
 			(async () => {

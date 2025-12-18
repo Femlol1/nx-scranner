@@ -35,7 +35,7 @@ export default function ScanResultModal({
 		return () => window.removeEventListener("keydown", handleEscape);
 	}, [isOpen, onClose]);
 
-	if (!isOpen || typeof window === 'undefined') return null;
+	if (!isOpen || typeof window === "undefined") return null;
 
 	const isValid = validationErrors.length === 0;
 
@@ -43,15 +43,19 @@ export default function ScanResultModal({
 		<>
 			{/* Backdrop */}
 			<div
-				className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9998] animate-in fade-in duration-200"
+				className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9998]"
 				onClick={onClose}
-				style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0 }}
 			/>
 
 			{/* Modal */}
-			<div 
-				className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-[9999] w-[90vw] max-w-3xl max-h-[85vh] overflow-auto bg-white dark:bg-gray-900 rounded-xl shadow-2xl animate-in zoom-in-95 duration-200"
-				style={{ position: 'fixed', transform: 'translate(-50%, -50%)' }}
+			<div
+				className="fixed z-[9999] w-[90vw] max-w-3xl max-h-[85vh] overflow-auto bg-white dark:bg-gray-900 rounded-xl shadow-2xl"
+				style={{
+					position: "fixed",
+					top: "50%",
+					left: "50%",
+					transform: "translate(-50%, -50%)",
+				}}
 			>
 				{/* Header */}
 				<div
@@ -230,7 +234,8 @@ export default function ScanResultModal({
 							</div>
 
 							{/* Optional Fields */}
-							{((parsed.refs && parsed.refs.length > 0) || parsed.coachCard) && (
+							{((parsed.refs && parsed.refs.length > 0) ||
+								parsed.coachCard) && (
 								<div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
 									{parsed.coachCard && (
 										<div className="p-3 rounded bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700">
