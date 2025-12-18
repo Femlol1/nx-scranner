@@ -856,6 +856,8 @@ export default function Home() {
 								className="btn btn-primary"
 								onClick={() => startScanning(selectedDeviceId)}
 								disabled={isCameraLoading}
+								aria-label="Start camera scanner"
+								aria-live="polite"
 							>
 								{isCameraLoading ? "Starting..." : "Start"}
 							</button>
@@ -864,18 +866,11 @@ export default function Home() {
 								className="btn btn-danger"
 								onClick={stopScanning}
 								disabled={isCameraLoading}
+								aria-label="Stop camera scanner"
 							>
 								Stop
 							</button>
 						)}
-
-						<button
-							className="btn btn-muted"
-							onClick={() => copyResult()}
-							disabled={!lastResult}
-						>
-							Copy
-						</button>
 
 						<button
 							className="btn btn-muted"
@@ -887,7 +882,6 @@ export default function Home() {
 					</div>
 
 					{error && <div className="text-sm text-red-600">{error}</div>}
-
 					{/* Notifications handled by Sonner <Toaster /> in layout */}
 				</div>
 

@@ -11,15 +11,20 @@ export default function AdminPage() {
 	const [lastRefreshed, setLastRefreshed] = useState<string | null>(null);
 	const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
 	const [search, setSearch] = useState<string>("");
+	const [currentPage, setCurrentPage] = useState<number>(1);
+	const [pageSize, setPageSize] = useState<number>(50);
 	// using sonner toast instead of local Toast component
 	const searchRef = useRef<HTMLInputElement | null>(null);
 
-	const load = async () => {
+	const load = async (page: number = 1, limit: number = 50) => {
 		setLoading(true);
 		setError(null);
 		try {
-			const r = await fetch("/api/scans/list");
-			const j = await r.json().catch(() => null);
+			const r = await fetch(`/api/scans/list?page=${page}&limit=${limit}`);
+			if (!r.ok) {
+				throw new Error(`Failed to load scans: ${r.status} ${r.statusText}`);
+			}
+			const j = await r.json();
 			let items: any[] = [];
 			if (Array.isArray(j)) items = j;
 			else if (j && Array.isArray(j.scans)) items = j.scans;
@@ -36,15 +41,17 @@ export default function AdminPage() {
 			setScans(items);
 			setLastRefreshed(new Date().toLocaleString());
 		} catch (e: any) {
-			setError(e?.message || String(e));
+			const errMsg = e?.message || String(e);
+			setError(errMsg);
+			toast.error(`Failed to load scans: ${errMsg}`);
 		} finally {
 			setLoading(false);
 		}
 	};
 
 	useEffect(() => {
-		load();
-	}, []);
+		load(currentPage, pageSize);
+	}, [currentPage, pageSize]);
 
 	const clearAll = async () => {
 		if (!confirm("Delete all scans for today? This cannot be undone.")) return;
@@ -53,7 +60,8 @@ export default function AdminPage() {
 			const r = await fetch("/api/scans/clear", { method: "POST" });
 			const j = await r.json().catch(() => ({}));
 			if (j && (j.ok || j.deletedCount >= 0)) {
-				await load();
+				setCurrentPage(1); // Reset to first page
+				await load(1, pageSize);
 				toast.success("Cleared today's scans");
 			} else {
 				const eMsg = (j && j.error) || "clear failed";
@@ -97,7 +105,7 @@ export default function AdminPage() {
 						)}
 					</div>
 
-					<div className="flex items-center gap-2">
+					<div className="flex items-center gap-2 flex-wrap">
 						<input
 							ref={searchRef}
 							value={search}
@@ -106,15 +114,30 @@ export default function AdminPage() {
 							className="px-2 py-1 border rounded text-sm bg-panel"
 							aria-label="Filter scans"
 						/>
+						<select
+							value={pageSize}
+							onChange={(e) => {
+								setPageSize(Number(e.target.value));
+								setCurrentPage(1);
+							}}
+							className="px-2 py-1 border rounded text-sm bg-panel"
+							aria-label="Items per page"
+						>
+							<option value={25}>25</option>
+							<option value={50}>50</option>
+							<option value={100}>100</option>
+							<option value={200}>200</option>
+						</select>
 						<button
 							className="btn"
 							onClick={async () => {
-								await load();
+								await load(currentPage, pageSize);
 								try {
 									toast.info("Refreshed");
 								} catch {}
 							}}
 							title="Refresh list"
+							disabled={loading}
 						>
 							{loading ? "Refreshing..." : "Refresh"}
 						</button>
@@ -133,10 +156,31 @@ export default function AdminPage() {
 
 				{/* Notifications handled by Sonner <Toaster /> in layout */}
 
-				<div className="mb-3 text-xs text-gray-500">
-					{lastRefreshed
-						? `Last refreshed: ${lastRefreshed}`
-						: "Not yet loaded"}
+				<div className="mb-3 flex items-center justify-between">
+					<div className="text-xs text-gray-500">
+						{lastRefreshed
+							? `Last refreshed: ${lastRefreshed}`
+							: "Not yet loaded"}
+					</div>
+					<div className="flex items-center gap-2">
+						<button
+							className="btn btn-muted text-sm"
+							onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+							disabled={currentPage === 1 || loading}
+							aria-label="Previous page"
+						>
+							← Prev
+						</button>
+						<span className="text-sm text-gray-600">Page {currentPage}</span>
+						<button
+							className="btn btn-muted text-sm"
+							onClick={() => setCurrentPage((p) => p + 1)}
+							disabled={scans.length < pageSize || loading}
+							aria-label="Next page"
+						>
+							Next →
+						</button>
+					</div>
 				</div>
 
 				{loading ? (
