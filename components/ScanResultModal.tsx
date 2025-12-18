@@ -6,6 +6,8 @@ import { createPortal } from "react-dom";
 interface ScanResultModalProps {
 	isOpen: boolean;
 	onClose: () => void;
+	onCancel?: () => void;
+	onContinue?: () => void;
 	lastResult: string | null;
 	parsed: any;
 	parsedKind: string | null;
@@ -19,6 +21,8 @@ interface ScanResultModalProps {
 export default function ScanResultModal({
 	isOpen,
 	onClose,
+	onCancel,
+	onContinue,
 	lastResult,
 	parsed,
 	parsedKind,
@@ -350,9 +354,16 @@ export default function ScanResultModal({
 				</div>
 
 				{/* Footer */}
-				<div className="sticky bottom-0 px-6 py-4 bg-gray-50 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-3">
+				<div className="sticky bottom-0 px-6 py-4 bg-gray-50 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 flex justify-between gap-3">
 					<button
-						onClick={onClose}
+						onClick={onCancel || onClose}
+						className="px-6 py-2.5 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold transition-colors shadow-sm"
+						disabled={isLoading}
+					>
+						Cancel Scanning
+					</button>
+					<button
+						onClick={onContinue || onClose}
 						className="px-6 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold transition-colors shadow-sm"
 						disabled={isLoading}
 					>

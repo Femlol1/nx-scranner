@@ -886,7 +886,7 @@ export default function Home() {
 					<div className="bg-muted rounded overflow-hidden aspect-video flex items-center justify-center relative shadow-sm border-default">
 						<video
 							ref={videoRef}
-							className="w-full h-full object-contain"
+							className="w-full h-full object-cover"
 							muted
 							playsInline
 						/>
@@ -1370,6 +1370,11 @@ export default function Home() {
 			<ScanResultModal
 				isOpen={showModal}
 				onClose={() => setShowModal(false)}
+				onCancel={() => setShowModal(false)}
+				onContinue={() => {
+					setShowModal(false);
+					startScanning(selectedDeviceId);
+				}}
 				lastResult={lastResult}
 				parsed={parsed}
 				parsedKind={parsedKind}
