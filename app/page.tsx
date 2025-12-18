@@ -386,7 +386,7 @@ export default function Home() {
 		if (badRefs.length > 0)
 			errors.push("refs: invalid bus reference codes: " + badRefs.join(","));
 
-		if (!/^[0-9a-fA-F]{16,32}$/.test(hash || ""))
+		if (!/^[0-9a-fA-F]{14,32}$/.test(hash || ""))
 			errors.push("hash: invalid hex id");
 
 		const fields = {
