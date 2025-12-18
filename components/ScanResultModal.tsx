@@ -11,6 +11,7 @@ interface ScanResultModalProps {
 	parsedKind: string | null;
 	validationErrors: string[];
 	lastUses: string[] | null;
+	scanCount: number;
 	formatQITDate: (s?: string | null) => string;
 }
 
@@ -22,6 +23,7 @@ export default function ScanResultModal({
 	parsedKind,
 	validationErrors,
 	lastUses,
+	scanCount,
 	formatQITDate,
 }: ScanResultModalProps) {
 	// Close modal on Escape key
@@ -316,8 +318,11 @@ export default function ScanResultModal({
 								</svg>
 								⚠️ Duplicate Scan Detected
 							</h3>
-							<p className="text-sm text-yellow-700 dark:text-yellow-300 mb-2">
-								This ticket has been scanned before:
+							<p className="text-sm text-yellow-700 dark:text-yellow-300 mb-2 font-semibold">
+								This ticket has been scanned {scanCount} time{scanCount !== 1 ? 's' : ''} total.
+							</p>
+							<p className="text-xs text-yellow-600 dark:text-yellow-400 mb-2">
+								Previous scan times:
 							</p>
 							<ul className="list-disc pl-5 space-y-1 text-sm text-yellow-700 dark:text-yellow-300">
 								{lastUses.map((u, i) => (

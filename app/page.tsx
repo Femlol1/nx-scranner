@@ -34,6 +34,7 @@ export default function Home() {
 	const [parsedKind, setParsedKind] = useState<string | null>(null);
 	const [validationErrors, setValidationErrors] = useState<string[]>([]);
 	const [lastUses, setLastUses] = useState<string[] | null>(null);
+	const [scanCount, setScanCount] = useState<number>(1);
 	const [pulse, setPulse] = useState(false);
 	const pulseTimerRef = useRef<number | null>(null);
 
@@ -604,11 +605,10 @@ export default function Home() {
 			setParsedKind(parsedRes.kind ?? null);
 			setValidationErrors(parsedRes.errors ?? []);
 
-			// Stop scanning and show modal for all scans (valid and invalid)
+			// Stop scanning immediately
 			stopScanning();
-			setShowModal(true);
 
-			// post and check server response for duplicate metadata
+			// post and check server response for duplicate metadata BEFORE showing modal
 			(async () => {
 				try {
 					const resp = await fetch("/api/scans", {
@@ -630,6 +630,8 @@ export default function Home() {
 						toast.warning(
 							`Duplicate scan — previously used at ${prev} (count: ${j.count})`
 						);
+						// Set scan count
+						setScanCount(j.count || 1);
 						// use recentUses directly from response (already last 10)
 						if (Array.isArray(j.recentUses) && j.recentUses.length > 0) {
 							setLastUses(
@@ -639,10 +641,17 @@ export default function Home() {
 							setLastUses(null);
 						}
 					} else {
+						// First scan
+						setScanCount(1);
 						setLastUses(null);
 					}
 				} catch (e) {
-					// ignore network errors
+					// ignore network errors but still set defaults
+					setScanCount(1);
+					setLastUses(null);
+				} finally {
+					// Show modal after API call completes (or fails)
+					setShowModal(true);
 				}
 			})();
 		} catch (e) {
@@ -1176,6 +1185,7 @@ export default function Home() {
 				parsedKind={parsedKind}
 				validationErrors={validationErrors}
 				lastUses={lastUses}
+				scanCount={scanCount}
 				formatQITDate={formatQITDate}
 			/>
 		</div>
